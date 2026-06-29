@@ -1,0 +1,31 @@
+{{- if .Values.istio.enabled }}
+apiVersion: networking.istio.io/v1alpha3
+kind: DestinationRule
+metadata:
+  name: {{ .Values.istio.destinationRuleName }}
+  labels:
+    {{- include "auragxp-frontend-uat.labels" . | nindent 4 }}
+spec:
+  host: {{ .Values.istio.serviceName }}
+  trafficPolicy:
+    connectionPool:
+      tcp:
+        maxConnections: {{ .Values.istio.trafficPolicy.maxConnections }}
+        connectTimeout: {{ .Values.istio.trafficPolicy.connectTimeout }}
+      http:
+        http1MaxPendingRequests: {{ .Values.istio.trafficPolicy.http1MaxPendingRequests }}
+        http2MaxRequests: {{ .Values.istio.trafficPolicy.http2MaxRequests }}
+        maxRequestsPerConnection: {{ .Values.istio.trafficPolicy.maxRequestsPerConnection }}
+        maxRetries: {{ .Values.istio.trafficPolicy.maxRetries }}
+    loadBalancer:
+      simple: {{ .Values.istio.trafficPolicy.loadBalancer }}
+    outlierDetection:
+      consecutive5xxErrors: {{ .Values.istio.trafficPolicy.consecutive5xxErrors }}
+      interval: {{ .Values.istio.trafficPolicy.interval }}
+      baseEjectionTime: {{ .Values.istio.trafficPolicy.baseEjectionTime }}
+      maxEjectionPercent: {{ .Values.istio.trafficPolicy.maxEjectionPercent }}
+  subsets:
+    - name: v1
+      labels:
+        version: v1
+{{- end }}

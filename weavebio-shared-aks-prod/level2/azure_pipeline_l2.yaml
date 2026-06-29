@@ -1,0 +1,381 @@
+trigger:
+  batch: true
+  branches:
+    include:
+      - infra/shared
+  paths:
+    include:
+      - weavebio-shared-aks-prod/level2/**
+
+resources:
+  repositories:
+    - repository: platformRepo
+      type: git
+      name: auragxp-platform/qmslms_phase1
+      ref: main
+      endpoint: auragxp-platform-sc
+
+pool:
+  name: Azure-Self-Hosted2
+
+variables:
+  - group: infra-vars-prod                   # Level 0/1 Global Vars (RG_NAME, STORAGE_ACCOUNT, etc)
+  - group: infra-vars-weavebio-shared-prod         # Weavebio Infrastructure Vars
+  - group: weavebio-functionapp-shared-prod  # Weavebio App/Secret Vars
+  - name: serviceConnection
+    value: auragxp-azureprod
+  - name: envName
+    value: Prod
+  - name: workingDir
+    value: weavebio-shared-aks-prod/level2
+
+
+stages:
+# ==========================================================
+# STAGE 1: TERRAFORM PLAN
+# ==========================================================
+- stage: TerraformLevel2_Plan
+  displayName: "Level2 - ${{ variables.envName }}"
+  jobs:
+  - job: TerraformPlan
+    steps:
+    - checkout: self
+    
+    - task: AzureCLI@2
+      displayName: "Net: Whitelist Agent IP (Storage)"
+      inputs:
+        azureSubscription: auragxp-azureprod
+        scriptType: bash
+        scriptLocation: inlineScript # This was present here
+        inlineScript: |
+          set -e
+          echo "Available Subscriptions for this Service Principal:"
+          az account list --output table
+
+          echo "Switching to subscription: $(ARM_SUBSCRIPTION_ID)"
+          az account set --subscription "$(ARM_SUBSCRIPTION_ID)"
+          az account show # This will confirm if the switch actually worked
+
+          AGENT_IP=$(curl -s https://api.ipify.org || curl -s https://ifconfig.me)
+          echo "Whitelisting Agent IP: $AGENT_IP"
+          az storage account network-rule add --resource-group "$(RG_NAME)" --account-name "$(STORAGE_ACCOUNT)" --ip-address "$AGENT_IP"
+          echo "Waiting for firewall propagation..."
+          sleep 15
+          
+                   for i in {1..12}; do
+            if az storage container list --account-name "$(STORAGE_ACCOUNT)" --auth-mode login > /dev/null 2>&1; then
+              echo "Success: Firewall is open."
+              exit 0
+            fi
+            echo "Attempt $i: Still waiting for firewall..."
+            sleep 10
+          done
+          echo "Error: Firewall did not open in time."
+          exit 1
+
+
+    - bash: |
+        set -e
+        mkdir -p $(Pipeline.Workspace)/bin
+        TERRAFORM_VERSION="1.9.3"
+        curl -sSL https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_amd64.zip -o terraform.zip
+        unzip -o terraform.zip
+        mv terraform $(Pipeline.Workspace)/bin/
+        curl -L https://github.com/dineshba/tf-summarize/releases/download/v0.3.10/tf-summarize_linux_amd64.tar.gz | tar xz
+        mv tf-summarize $(Pipeline.Workspace)/bin/
+        echo "##vso[task.prependpath]$(Pipeline.Workspace)/bin"
+
+
+        echo "TF_VAR_customer_name = [$(TF_VAR_customer_name)]"
+        echo "TF_VAR_environment   = [$(TF_VAR_environment)]"
+
+
+      displayName: "Setup: Install TF"
+
+    - bash: |
+        set -e
+        rm -f tfplan tfplan.json plan_summary.md
+        cat <<'EOF' > keyvault_values.json
+        $(TF_VAR_keyvault_secret_values)
+        EOF
+        export TF_VAR_customer_name="$(TF_VAR_customer_name)"
+        export TF_VAR_environment="$(TF_VAR_environment)"
+        export TF_VAR_location="$(TF_VAR_location)"
+        export TF_VAR_storage_location="$(TF_VAR_storage_location)"
+        export TF_VAR_tenant_id="$(TF_VAR_tenant_id)"
+        export TF_VAR_rg_name="$(TF_VAR_resource_group_name)"
+        export TF_VAR_tfstate_rg="$(RG_NAME)"
+        export TF_VAR_tfstate_storage_account="$(STORAGE_ACCOUNT)"
+        export TF_VAR_tfstate_container="$(CONTAINER_NAME)"
+        export TF_VAR_keyvault_name="$(TF_VAR_keyvault_name)"
+        export TF_VAR_terraform_kv_secret_user_object_id="$(TF_VAR_terraform_kv_secret_user_object_id)"
+        export TF_VAR_storage_account_name="$(TF_VAR_storage_account_name)"
+        export TF_VAR_function_app_name="$(TF_VAR_function_app_name)"
+        export TF_VAR_function_app_location="$(TF_VAR_function_app_location)"
+        export TF_VAR_keyvault_secrets='$(TF_VAR_keyvault_secrets)'
+
+        terraform init \
+          -backend-config="resource_group_name=$(RG_NAME)" \
+          -backend-config="storage_account_name=$(STORAGE_ACCOUNT)" \
+          -backend-config="container_name=$(CONTAINER_NAME)" \
+          -backend-config="key=$TF_VAR_customer_name-level2.tfstate" \
+          -backend-config="use_azuread_auth=true"
+
+        terraform plan -input=false -var="keyvault_secret_values=$(cat keyvault_values.json)" -out=tfplan
+        terraform show -json tfplan > tfplan.json
+        echo "### Terraform Plan Summary - $(envName)" > plan_summary.md
+        tf-summarize -md tfplan.json >> plan_summary.md
+        echo "##vso[task.uploadsummary]$(pwd)/plan_summary.md"
+        tf-summarize tfplan.json
+      displayName: "TF: Plan & Generate Table"
+      workingDirectory: weavebio-shared-aks-prod/level2
+      env:
+        ARM_CLIENT_ID: $(ARM_CLIENT_ID)
+        ARM_CLIENT_SECRET: $(ARM_CLIENT_SECRET)
+        ARM_TENANT_ID: $(ARM_TENANT_ID)
+        ARM_SUBSCRIPTION_ID: $(ARM_SUBSCRIPTION_ID)
+        ARM_STORAGE_USE_AZUREAD: true
+
+    - task: AzureCLI@2
+      displayName: "Net: Remove Agent IP"
+      condition: always()
+      inputs:
+        azureSubscription: auragxp-azureprod
+        scriptType: bash
+        scriptLocation: inlineScript # FIXED
+        inlineScript: |
+          AGENT_IP=$(curl -s https://api.ipify.org || curl -s https://ifconfig.me)
+          az storage account network-rule remove --resource-group "$(RG_NAME)" --account-name "$(STORAGE_ACCOUNT)" --ip-address "$AGENT_IP"
+
+    - publish: $(Build.SourcesDirectory)/weavebio-shared-aks-prod/level2/tfplan
+      artifact: L2_Plan_$(envName)
+
+# ==========================================================
+# STAGE 2: TERRAFORM APPLY
+# ==========================================================
+- stage: TerraformLevel2
+  displayName: "Level2 Apply - ${{ variables.envName }}"
+  dependsOn: TerraformLevel2_Plan
+  jobs:
+  - deployment: TerraformApply
+    environment: '$(envName)' 
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - checkout: self
+          - download: current
+            artifact: L2_Plan_$(envName)
+
+          - task: AzureCLI@2
+            displayName: "Net: Whitelist Agent IP (Storage & KV)"
+            inputs:
+              azureSubscription: auragxp-azureprod
+              scriptType: bash
+              scriptLocation: inlineScript # FIXED
+              inlineScript: |
+                AGENT_IP=$(curl -s https://api.ipify.org || curl -s https://ifconfig.me)
+                az storage account network-rule add --resource-group "$(RG_NAME)" --account-name "$(STORAGE_ACCOUNT)" --ip-address "$AGENT_IP"
+                az keyvault network-rule add --name "$(TF_VAR_keyvault_name)" --ip-address "$AGENT_IP"
+                sleep 15
+
+          - task: AzureCLI@2
+            displayName: "TF Apply"
+            inputs:
+              azureSubscription: auragxp-azureprod
+              scriptType: bash
+              scriptLocation: inlineScript
+              workingDirectory: weavebio-shared-aks-prod/level2
+              inlineScript: |
+                cp $(Pipeline.Workspace)/L2_Plan_$(envName)/tfplan .
+                terraform init \
+                  -backend-config="resource_group_name=$(RG_NAME)" \
+                  -backend-config="storage_account_name=$(STORAGE_ACCOUNT)" \
+                  -backend-config="container_name=$(CONTAINER_NAME)" \
+                  -backend-config="key=$TF_VAR_customer_name-level2.tfstate" \
+                  -backend-config="use_azuread_auth=true"
+                terraform apply -auto-approve tfplan
+            env:
+              ARM_CLIENT_ID: $(ARM_CLIENT_ID)
+              ARM_CLIENT_SECRET: $(ARM_CLIENT_SECRET)
+              ARM_TENANT_ID: $(ARM_TENANT_ID)
+              ARM_SUBSCRIPTION_ID: $(ARM_SUBSCRIPTION_ID)
+              ARM_STORAGE_USE_AZUREAD: true
+
+          - task: AzureCLI@2
+            displayName: "Post-Apply: Role Assignment"
+            inputs:
+              azureSubscription: auragxp-azureprod
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                set -e
+                Shared_RG="$(TF_VAR_app_service_plan_resource_group_name)"
+                Shared_AKS="$(TF_VAR_aks_name)"
+                CUST_RG="$(TF_VAR_resource_group_name)"
+                CUST_KV="$(TF_VAR_keyvault_name)"
+                AKS_OBJECT_ID=$(az aks show -g "$Shared_RG" -n "$Shared_AKS" --query "addonProfiles.azureKeyvaultSecretsProvider.identity.objectId" -o tsv)
+                az role assignment create --assignee-object-id "$AKS_OBJECT_ID" --assignee-principal-type ServicePrincipal --role "Key Vault Secrets User" --scope "/subscriptions/$(ARM_SUBSCRIPTION_ID)/resourceGroups/$CUST_RG/providers/Microsoft.KeyVault/vaults/$CUST_KV"
+
+          - task: AzureCLI@2
+            displayName: "Net: Remove Agent IP"
+            condition: always()
+            inputs:
+              azureSubscription: auragxp-azureprod
+              scriptType: bash
+              scriptLocation: inlineScript # FIXED
+              inlineScript: |
+                AGENT_IP=$(curl -s https://api.ipify.org || curl -s https://ifconfig.me)
+                az storage account network-rule remove --resource-group "$(RG_NAME)" --account-name "$(STORAGE_ACCOUNT)" --ip-address "$AGENT_IP"
+                az keyvault network-rule remove --name "$(TF_VAR_keyvault_name)" --ip-address "$AGENT_IP"
+
+# ==========================================================
+# STAGE 3: SYNC STORAGE SECRETS
+# ==========================================================
+- stage: SyncStorageSecretToKeyVault
+  displayName: 'Sync Secrets - ${{ variables.envName }}'
+  dependsOn: TerraformLevel2
+  jobs:
+    - job: SyncSecret
+      steps:
+        - task: AzureCLI@2
+          inputs:
+            azureSubscription: auragxp-azureprod
+            scriptType: bash
+            scriptLocation: inlineScript # FIXED
+            inlineScript: |
+              set -e
+              AGENT_IP=$(curl -s https://api.ipify.org || curl -s https://ifconfig.me)
+              az keyvault network-rule add --name "$(TF_VAR_keyvault_name)" --ip-address "$AGENT_IP"
+              sleep 10
+              CONNECTION_STRING=$(az storage account show-connection-string --name "$(TF_VAR_storage_account_name)" --resource-group "$(TF_VAR_resource_group_name)" --query "connectionString" -o tsv)
+              az keyvault secret set --vault-name "$(TF_VAR_keyvault_name)" --name "AZURE-STORAGE-CONNECTION-STRING" --value "$CONNECTION_STRING" --output none
+              az keyvault network-rule remove --name "$(TF_VAR_keyvault_name)" --ip-address "$AGENT_IP"
+
+# ==========================================================
+# STAGE 4: FUNCTION APP DEPLOY
+# ==========================================================
+- stage: DeployFunctionApp
+  displayName: 'Deploy Function App'
+  dependsOn: SyncStorageSecretToKeyVault
+  jobs:
+  - deployment: BuildAndDeploy
+    environment: '$(envName)'
+    variables:
+      # These match the IP names created in your Terraform stage
+      dbPipName: "$(TF_VAR_customer_name)-$(TF_VAR_environment)-db-pip"
+      redisPipName: "$(TF_VAR_customer_name)-$(TF_VAR_environment)-redis-pip"
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - checkout: platformRepo 
+          
+          - task: NodeTool@0
+            inputs: { versionSpec: '22' }
+            
+          - bash: npm install --omit=dev
+            workingDirectory: $(Build.SourcesDirectory)/apps/FunctionApp
+            displayName: 'npm install'
+
+          - bash: |
+              set -e
+              python3 -c "
+              import zipfile, os
+              src = os.path.join(os.environ['BUILD_SOURCESDIRECTORY'], 'apps', 'FunctionApp')
+              output = os.path.join(os.environ['BUILD_ARTIFACTSTAGINGDIRECTORY'], 'functionapp.zip')
+              zf = zipfile.ZipFile(output, 'w', zipfile.ZIP_DEFLATED)
+              for root, dirs, files in os.walk(src):
+                  for file in files:
+                      filepath = os.path.join(root, file)
+                      zf.write(filepath, os.path.relpath(filepath, src))
+              zf.close()
+              "
+            displayName: 'Zip Application'
+
+          - task: AzureCLI@2
+            displayName: 'Fetch IPs & Update App Settings'
+            inputs:
+              azureSubscription: auragxp-azureprod
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                set -e
+                
+                # Fetch IPs
+                NEW_DB_IP=$(az network public-ip show -g "$(TF_VAR_resource_group_name)" -n "$(dbPipName)" --query ipAddress -o tsv)
+                NEW_REDIS_IP=$(az network public-ip show -g "$(TF_VAR_resource_group_name)" -n "$(redisPipName)" --query ipAddress -o tsv)
+                
+                echo "Updating Settings for App: $(TF_VAR_function_app_name)"
+
+                # We use '|' as a delimiter in sed because connection strings contain '/'
+                ORIGINAL_PG_CONN='$(PG_CONNECTION_STRING)'
+                DYNAMIC_PG_CONN=$(echo "$ORIGINAL_PG_CONN" | sed -E "s|@[^:]+:|@$NEW_DB_IP:|")
+
+                az functionapp config appsettings set \
+                  --name "$(TF_VAR_function_app_name)" \
+                  --resource-group "$(TF_VAR_resource_group_name)" \
+                  --settings \
+                    WEBSITE_RUN_FROM_PACKAGE=1 \
+                    FUNCTIONS_WORKER_RUNTIME=node \
+                    WEBSITE_NODE_DEFAULT_VERSION=~22 \
+                    PostgresConnectionString="$DYNAMIC_PG_CONN" \
+                    REDIS_HOST="$NEW_REDIS_IP" \
+                    REDIS_PASSWORD="$(REDIS_PASSWORD)" \
+                    REDIS_PORT="$(REDIS_PORT)" > /dev/null
+
+          - task: AzureCLI@2
+            displayName: 'Deploy & Sync KV URL'
+            inputs:
+              azureSubscription: auragxp-azureprod
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                set -e
+                
+                # 1. Deploy
+                az functionapp deployment source config-zip \
+                  --name "$(TF_VAR_function_app_name)" \
+                  --resource-group "$(TF_VAR_resource_group_name)" \
+                  --src "$(Build.ArtifactStagingDirectory)/functionapp.zip"
+                
+                # Restart to ensure new code is picked up
+                az functionapp restart --name "$(TF_VAR_function_app_name)" --resource-group "$(TF_VAR_resource_group_name)"
+
+                # 2. Whitelist Agent IP for Key Vault
+                AGENT_IP=$(curl -s https://api.ipify.org || curl -s https://ifconfig.me)
+                az keyvault network-rule add --name "$(TF_VAR_keyvault_name)" --ip-address "$AGENT_IP"
+                
+                echo "Waiting 30 seconds for runtime to initialize..."
+                sleep 30
+                
+                # 3. Get Master Key with RETRY LOOP
+                SUB_ID=$(az account show --query id -o tsv)
+                URI="https://management.azure.com/subscriptions/${SUB_ID}/resourceGroups/$(TF_VAR_resource_group_name)/providers/Microsoft.Web/sites/$(TF_VAR_function_app_name)/host/default/listKeys?api-version=2020-06-01"
+                
+                MASTER_KEY=""
+                for i in {1..5}; do
+                  echo "Attempt $i: Fetching Master Key..."
+                  MASTER_KEY=$(az rest --method post --uri "$URI" --query "masterKey" -o tsv 2>/dev/null || echo "")
+                  
+                  if [ -n "$MASTER_KEY" ]; then
+                    echo "Successfully retrieved Master Key."
+                    break
+                  fi
+                  
+                  echo "Runtime not ready yet. Retrying in 30 seconds..."
+                  sleep 30
+                done
+
+                if [ -z "$MASTER_KEY" ]; then
+                  echo "ERROR: Failed to retrieve Master Key after 5 attempts."
+                  exit 1
+                fi
+                
+                FUNC_URL="https://$(TF_VAR_function_app_name).azurewebsites.net/api/org-provisioning?code=${MASTER_KEY}"
+
+                # 4. Update Secret
+                az keyvault secret set --vault-name "$(TF_VAR_keyvault_name)" --name "ORG-PROVISION-FUNCTION-URL" --value "$FUNC_URL" --output none
+                
+                # 5. Cleanup
+                az keyvault network-rule remove --name "$(TF_VAR_keyvault_name)" --ip-address "$AGENT_IP"

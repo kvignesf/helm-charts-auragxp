@@ -1,0 +1,27 @@
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: {{ .Release.Name }}-db-cluster
+  namespace: {{ .Release.Namespace }}
+spec:
+  host: {{ .Values.database.cluster.readWriteHost }}
+  trafficPolicy:
+    tls:
+      mode: DISABLE
+    connectionPool:
+      tcp:
+        maxConnections: {{ .Values.database.cluster.maxConnections }}
+      http:
+        http1MaxPendingRequests: {{ .Values.database.cluster.http1MaxPendingRequests }}
+        maxRequestsPerConnection: {{ .Values.database.cluster.maxRequestsPerConnection }}
+---
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: {{ .Release.Name }}-db-cluster-ro
+  namespace: {{ .Release.Namespace }}
+spec:
+  host: {{ .Values.database.cluster.readOnlyHost }}
+  trafficPolicy:
+    tls:
+      mode: DISABLE

@@ -1,0 +1,57 @@
+{{- if .Values.services.externalAccess }}
+
+---
+# External Read-Write Service (LoadBalancer - STATIC IP)
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "watershed-cnpg.clusterName" . }}-rw-external
+  namespace: {{ include "watershed-cnpg.namespace" . }}
+  labels:
+    {{- include "watershed-cnpg.labels" . | nindent 4 }}
+    component: database
+    access: external-rw
+  annotations:
+    service.beta.kubernetes.io/azure-pip-name: {{ .Values.services.publicIPName | quote }}
+    service.beta.kubernetes.io/azure-load-balancer-resource-group: "rg-watershed-level2-prod-esu"
+spec:
+  type: LoadBalancer
+  {{- if .Values.services.allowedIPs }}
+  loadBalancerSourceRanges:
+    {{- range .Values.services.allowedIPs }}
+    - {{ . | quote }}
+    {{- end }}
+  {{- end }}
+  ports:
+    - name: postgresql
+      port: 5432
+      targetPort: 5432
+      protocol: TCP
+  selector:
+    cnpg.io/cluster: {{ include "watershed-cnpg.clusterName" . }}
+    cnpg.io/instanceRole: primary
+
+---
+# Read-Only Service (NodePort)
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "watershed-cnpg.clusterName" . }}-ro-nodeport
+  namespace: {{ include "watershed-cnpg.namespace" . }}
+  labels:
+    {{- include "watershed-cnpg.labels" . | nindent 4 }}
+    component: database
+    access: nodeport-ro
+spec:
+  type: NodePort
+  ports:
+    - name: postgresql
+      port: 5432
+      targetPort: 5432
+      nodePort: {{ .Values.services.ro.nodePort }}
+      protocol: TCP
+  selector:
+    cnpg.io/cluster: {{ include "watershed-cnpg.clusterName" . }}
+    cnpg.io/instanceRole: replica
+
+{{- end }}

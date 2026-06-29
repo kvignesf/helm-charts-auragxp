@@ -1,0 +1,14 @@
+apiVersion: networking.istio.io/v1
+kind: ServiceEntry
+metadata:
+  name: azure-static-web-scorm
+  namespace: auragxp-prod
+spec:
+  hosts:
+    - stesuauragxpprdlms.z13.web.core.windows.net
+  ports:
+    - number: 443
+      name: https
+      protocol: HTTPS
+  resolution: DNS
+  location: MESH_EXTERNAL

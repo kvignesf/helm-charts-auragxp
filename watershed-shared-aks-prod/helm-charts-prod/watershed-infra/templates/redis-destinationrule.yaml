@@ -1,0 +1,10 @@
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: watershed-redis-mtls-disabled
+  namespace: {{ .Values.namespace }}
+spec:
+  host: {{ .Values.istio.redisHost }}
+  trafficPolicy:
+    tls:
+      mode: DISABLE

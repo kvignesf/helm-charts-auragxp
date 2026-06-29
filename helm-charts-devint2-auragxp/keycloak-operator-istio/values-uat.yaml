@@ -1,0 +1,75 @@
+namespace: auragxp-keycloak-devint2
+
+keycloak:
+  replicas: 2
+  hostname: dev-ph2.auratrace.ai
+  http:
+    enabled: true
+  image: quay.io/keycloak/keycloak:26.4.7
+
+  resources:
+    requests:
+      cpu: 250m
+      memory: 768Mi
+    limits:
+      cpu: 1000m
+      memory: 1536Mi
+
+  db:
+    host: auragxp-db-devint2-cluster-rw.auragxp-db-devint2.svc.cluster.local
+    port: 5432
+    database: aura_qpos_kc_db
+    usernameSecret: kv-auragxp-devint2-wus-sh
+    passwordSecret: kv-auragxp-devint2-wus-sh
+
+podAnnotations:
+  sidecar.istio.io/inject: "false"
+
+istio:
+  gatewayName: watershed-istio-gateway
+  virtualServiceName: auragxp-devint2-main-vs
+
+csi:
+  clientId: "e09e2815-5e84-47c7-b4e2-6070e08ae362"
+  tenantId: "788f6d9e-1a66-4385-9aee-01da8900e00b"
+  vaultName: "kv-agxp-dev-eus-sh"
+  secretName: kv-auragxp-devint2-wus-sh
+  keyMappings:
+    dbUsername: KC_DB_USERNAME
+    dbPassword: KC_DB_PASSWORD
+    adminUsername: KEYCLOAK_ADMIN
+    adminPassword: KEYCLOAK_ADMIN_PASSWORD
+
+certificate:
+  enabled: true
+  secretName: keycloak-tls
+  dnsNames:
+    - dev-ph2.auratrace.ai
+  issuerRef:
+    name: letsencrypt-prod
+    kind: ClusterIssuer
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 3
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 70
+
+podAntiAffinity:
+  enabled: true
+  requiredDuringScheduling: true
+
+serviceAccount:
+  name: auragxp-serviceaccount-devint2
+  clientId: "e09e2815-5e84-47c7-b4e2-6070e08ae362"
+  tenantId: "788f6d9e-1a66-4385-9aee-01da8900e00b"
+  create: false
+
+frontend:
+  host: auragxp-frontend-devint2
+  port: 3000
+
+backend:
+  host: auragxp-backend-devint2
+  port: 3901

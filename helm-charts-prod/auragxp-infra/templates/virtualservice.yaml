@@ -1,0 +1,171 @@
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: auragxp-main-vs
+  namespace: auragxp-prod
+  labels:
+    app.kubernetes.io/managed-by: Helm
+  annotations:
+    meta.helm.sh/release-name: auragxp-infra
+    meta.helm.sh/release-namespace: auragxp-prod
+
+spec:
+  gateways:
+    - auragxp-prod/auragxp-istio-gateway
+
+  hosts:
+    - auragxp.auratrace.ai
+
+  http:
+
+    # 0️⃣ ACME challenge
+    - match:
+        - uri:
+            prefix: /.well-known/acme-challenge/
+      route:
+        - destination:
+            host: cm-acme-http-solver-jcc5d.auragxp-prod.svc.cluster.local
+            port:
+              number: 8089
+
+    # 1️⃣ API proxy → FRONTEND
+    - match:
+        - uri:
+            prefix: /api/proxy/
+      headers:
+        request:
+          set:
+            Authorization: "%REQ(Authorization)%"
+            Cookie: "%REQ(Cookie)%"
+            X-Forwarded-Host: auragxp.auratrace.ai
+            X-Forwarded-Port: "443"
+            X-Forwarded-Proto: https
+      route:
+        - destination:
+            host: auragxp-frontend
+            port:
+              number: 3000
+
+    # 2️⃣ Auth/session → FRONTEND
+    - match:
+        - uri:
+            prefix: /api/auth/
+        - uri:
+            prefix: /api/org/select
+        - uri:
+            prefix: /api/keepalive
+        - uri:
+            prefix: /api/logout
+      headers:
+        request:
+          set:
+            Authorization: "%REQ(Authorization)%"
+            Cookie: "%REQ(Cookie)%"
+            X-Forwarded-Host: auragxp.auratrace.ai
+            X-Forwarded-Port: "443"
+            X-Forwarded-Proto: https
+      route:
+        - destination:
+            host: auragxp-frontend
+            port:
+              number: 3000
+
+    # 3️⃣ Backend APIs → BACKEND
+    - match:
+        - uri:
+            prefix: /api/
+      timeout: 30s
+      headers:
+        request:
+          set:
+            X-Forwarded-Host: auragxp.auratrace.ai
+            X-Forwarded-Port: "443"
+            X-Forwarded-Proto: https
+      route:
+        - destination:
+            host: auragxp-backend
+            port:
+              number: 3901
+
+    # 4️⃣ Keycloak
+    - match:
+        - uri:
+            prefix: /keycloak
+      timeout: 30s
+      route:
+        - destination:
+            host: keycloak-service.auragxp-keycloak.svc.cluster.local
+            port:
+              number: 8080
+
+    # 5️⃣ Static assets
+    - match:
+        - uri:
+            prefix: /_next/
+        - uri:
+            prefix: /static/
+      route:
+        - destination:
+            host: auragxp-frontend
+            port:
+              number: 3000
+
+    # 6️⃣ SCORM external
+    - match:
+        - uri:
+            prefix: /scorm/
+      rewrite:
+        uri: /
+      headers:
+        request:
+          set:
+            Host: stesuauragxpprdlms.z13.web.core.windows.net
+            X-Forwarded-Proto: https
+      route:
+        - destination:
+            host: stesuauragxpprdlms.z13.web.core.windows.net
+            port:
+              number: 443
+
+    # 7️⃣ Support
+    - match:
+        - uri:
+            exact: /support
+        - uri:
+            prefix: /support/
+      timeout: 30s
+      rewrite:
+        uri: /
+      route:
+        - destination:
+            host: auragxp-support
+            port:
+              number: 80
+
+    # 8️⃣ Grafana (FIXED ONLY THIS BLOCK)
+    - match:
+        - uri:
+            exact: /grafana
+        - uri:
+            prefix: /grafana/
+      headers:
+        request:
+          add:
+            X-Forwarded-Prefix: /grafana
+            X-Forwarded-Proto: http
+      route:
+        - destination:
+            host: monitoring-grafana.monitoring.svc.cluster.local
+            port:
+              number: 80
+
+    # 9️⃣ Catch-all → FRONTEND
+    - match:
+        - uri:
+            prefix: /
+      timeout: 30s
+      route:
+        - destination:
+            host: auragxp-frontend
+            port:
+              number: 3000

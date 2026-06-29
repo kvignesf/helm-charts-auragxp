@@ -1,0 +1,28 @@
+apiVersion: networking.istio.io/v1
+kind: Gateway
+metadata:
+  name: auragxp-istio-gateway
+  namespace: auragxp-prod
+spec:
+  selector:
+    istio: aks-istio-ingressgateway-external
+  servers:
+  # HTTP (ACME + redirect)
+  - port:
+      number: 80
+      name: http
+      protocol: HTTP
+    hosts:
+    - auragxp.auratrace.ai
+
+  # HTTPS (TLS terminated, routed as HTTP)
+  - port:
+      number: 443
+      name: https
+      protocol: HTTPS
+    tls:
+      mode: SIMPLE
+      credentialName: auragxp.auratrace.ai-tls-secret 
+    hosts:
+    - auragxp.auratrace.ai
+

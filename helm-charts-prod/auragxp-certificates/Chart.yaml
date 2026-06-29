@@ -1,0 +1,7 @@
+apiVersion: v2
+name: auragxp-certificates
+description: Cluster-wide certificate issuers for Auragxp
+type: application
+version: 0.1.0
+appVersion: "1.0"
+

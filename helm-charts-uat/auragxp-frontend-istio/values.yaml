@@ -1,0 +1,136 @@
+# Application Configuration
+replicaCount: 2
+appName: auragxp-frontend-uat
+namespace: auragxp-uat
+
+image:
+  repository: acrglobalwus.azurecr.io/auragxp/uat/frontend
+  tag: "ba5524f4"
+  pullPolicy: Always
+
+service:
+  type: ClusterIP
+  port: 3000
+  targetPort: 3000
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 256Mi
+    ephemeral-storage: 500Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+    ephemeral-storage: 1Gi
+
+nodeSelector:
+  auragxp/deploy: application
+
+# Service Account
+serviceAccount:
+  name: auragxp-serviceaccount-uat
+  create: false
+
+# Istio Configuration
+istio:
+  enabled: true
+  host: auragxp-uat.auratrace.ai
+  gateway: auragxp-uat/watershed-istio-gateway
+  serviceName: auragxp-frontend-uat
+  destinationRuleName: auragxp-frontend-uat
+  ingressNamespace: aks-istio-ingress
+  ingressGatewayLabel: aks-istio-ingressgateway-external
+  trafficPolicy:
+    maxConnections: 100
+    connectTimeout: 30s
+    http1MaxPendingRequests: 50
+    http2MaxRequests: 100
+    maxRequestsPerConnection: 10
+    maxRetries: 3
+    loadBalancer: ROUND_ROBIN
+    consecutive5xxErrors: 5
+    interval: 30s
+    baseEjectionTime: 30s
+    maxEjectionPercent: 100
+
+# Pod Annotations
+podAnnotations:
+  sidecar.istio.io/inject: "true"
+  proxy.istio.io/config: '{"holdApplicationUntilProxyStarts": true}'
+
+# Backend Configuration
+backend:
+  appName: auragxp-backend-uat
+  port: 3901
+
+# Keycloak Configuration
+keycloak:
+  appName: keycloak
+  port: 8080
+  namespace: auragxp-keycloak-uat
+
+# Auth Proxy Configuration
+authProxy:
+  enabled: false
+  appName: auth-proxy
+
+# CSI Driver Configuration for Azure Key Vault
+csiKeyVault:
+  enabled: true
+  secretProviderClassName: "auragxp-frontend-kv-uat"
+  syncedK8sSecretName: "auragxp-frontend-secrets-uat"
+
+  # Key Vault connection details
+  vaultName: "kv-auragxp-uat-eus-sh"
+  vaultUrl: "https://kv-auragxp-uat-eus-sh.vault.azure.net/"
+  tenantId: "788f6d9e-1a66-4385-9aee-01da8900e00b"
+
+  # Workload Identity details
+  clientId: "e09e2815-5e84-47c7-b4e2-6070e08ae362"
+
+  # Frontend specific secrets
+  objects:
+    array:
+      - objectName: "NEXTAUTH-URL"
+        objectType: secret
+      - objectName: "NEXTAUTH-SECRET"
+        objectType: secret
+      - objectName: "BACKEND-KEYCLOAK-ISSUER"
+        objectType: secret
+      - objectName: "BACKEND-KEYCLOAK-CLIENT-ID"
+        objectType: secret
+      - objectName: "BACKEND-KEYCLOAK-CLIENT-SECRET"
+        objectType: secret
+
+# Autoscaling
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 5
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 70
+
+# Pod Anti-Affinity
+podAntiAffinity:
+  enabled: true
+  preferredDuringScheduling: true
+  requiredDuringScheduling: false
+
+# Network Policy
+networkPolicy:
+  enabled: true
+  name: auragxp-frontend-uat-network-policy
+  egress:
+    dnsPort: 53
+    istioControlPlanePort: 15012
+
+# HTTP Route (disabled)
+httpRoute:
+  enabled: false
+
+# Ingress (disabled)
+ingress:
+  enabled: false
+
+# Image Pull Secrets (if any)
+imagePullSecrets: []

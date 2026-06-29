@@ -1,0 +1,6 @@
+namespace: auragxp-db-uat
+clusterName: auragxp-db-uat-cluster
+
+scheduledBackup:
+  name: auragxp-uat-backup
+  schedule: "0 0 */2 * *"

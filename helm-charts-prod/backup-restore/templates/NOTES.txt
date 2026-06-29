@@ -1,0 +1,17 @@
+AuraGXP Backup System deployed successfully.
+
+Backups:
+  Daily:   {{ .Values.dailyBackup.enabled }} ({{ .Values.dailyBackup.schedule }})
+  Weekly:  {{ .Values.weeklyBackup.enabled }} ({{ .Values.weeklyBackup.schedule }})
+  Monthly: {{ .Values.monthlyBackup.enabled }} ({{ .Values.monthlyBackup.schedule }})
+
+Storage:
+  Daily:   {{ .Values.backup.dailyDestinationPath }}
+  Weekly:  {{ .Values.backup.weeklyDestinationPath }}
+  Monthly: {{ .Values.backup.monthlyDestinationPath }}
+
+Commands:
+  kubectl get scheduledbackup -n {{ .Values.namespace }}
+  kubectl annotate scheduledbackup/{{ .Values.dailyBackup.name }} -n {{ .Values.namespace }} cnpg.io/backupNow=true
+
+Note: Restore functionality removed - use separate restore chart.

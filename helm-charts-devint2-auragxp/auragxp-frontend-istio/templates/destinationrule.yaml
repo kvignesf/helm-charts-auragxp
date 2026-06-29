@@ -1,0 +1,32 @@
+{{- if .Values.istio.enabled }}
+apiVersion: networking.istio.io/v1alpha3
+kind: DestinationRule
+metadata:
+  name: {{ .Values.appName }}-dr
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "auragxp-frontend-devint2.labels" . | nindent 4 }}
+spec:
+  host: {{ .Values.istio.serviceName }}
+  trafficPolicy:
+    {{- if .Values.istio.connectionPool }}
+    connectionPool:
+      {{- toYaml .Values.istio.connectionPool | nindent 6 }}
+    {{- end }}
+    {{- if .Values.istio.loadBalancer }}
+    loadBalancer:
+      {{- toYaml .Values.istio.loadBalancer | nindent 6 }}
+    {{- end }}
+    {{- if .Values.istio.outlierDetection }}
+    outlierDetection:
+      {{- toYaml .Values.istio.outlierDetection | nindent 6 }}
+    {{- end }}
+  {{- if .Values.istio.subsets }}
+  subsets:
+    {{- range .Values.istio.subsets }}
+    - name: {{ .name }}
+      labels:
+        {{- toYaml .labels | nindent 8 }}
+    {{- end }}
+  {{- end }}
+{{- end }}

@@ -1,0 +1,10 @@
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: azure-scorm-dr
+  namespace: {{ .Values.namespace }}
+spec:
+  host: {{ .Values.istio.scormHost }}
+  trafficPolicy:
+    tls:
+      mode: SIMPLE

@@ -1,0 +1,69 @@
+{{- if .Values.services.externalAccess }}
+
+---
+# ============================================================
+# External Read-Write Service (LoadBalancer)
+# ============================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "auragxp-cnpg.clusterName" . }}-rw-external
+  namespace: {{ include "auragxp-cnpg.namespace" . }}
+  labels:
+    {{- include "auragxp-cnpg.labels" . | nindent 4 }}
+    component: database
+    access: external-rw
+spec:
+  type: LoadBalancer
+
+  {{- if .Values.services.allowedIPs }}
+  loadBalancerSourceRanges:
+    {{- range .Values.services.allowedIPs }}
+    - {{ . | quote }}
+    {{- end }}
+  {{- end }}
+
+  ports:
+    - name: postgresql
+      port: 5432
+      targetPort: 5432
+      protocol: TCP
+
+  selector:
+    cnpg.io/cluster: {{ include "auragxp-cnpg.clusterName" . }}
+    cnpg.io/instanceRole: primary
+
+---
+# ============================================================
+# External Read-Only Service (LoadBalancer)
+# ============================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "auragxp-cnpg.clusterName" . }}-ro-external
+  namespace: {{ include "auragxp-cnpg.namespace" . }}
+  labels:
+    {{- include "auragxp-cnpg.labels" . | nindent 4 }}
+    component: database
+    access: external-ro
+spec:
+  type: LoadBalancer
+
+  {{- if .Values.services.allowedIPs }}
+  loadBalancerSourceRanges:
+    {{- range .Values.services.allowedIPs }}
+    - {{ . | quote }}
+    {{- end }}
+  {{- end }}
+
+  ports:
+    - name: postgresql
+      port: 5432
+      targetPort: 5432
+      protocol: TCP
+
+  selector:
+    cnpg.io/cluster: {{ include "auragxp-cnpg.clusterName" . }}
+    cnpg.io/instanceRole: replica
+
+{{- end }}

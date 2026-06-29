@@ -1,0 +1,39 @@
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Values.networkPolicy.name }}
+  namespace: {{ .Values.networkPolicy.namespace | default .Values.namespace }}
+  labels:
+    app.kubernetes.io/instance: {{ index .Values.networkPolicy.podSelector "app.kubernetes.io/instance" | default "auragxp-redis-uat" }}
+    app.kubernetes.io/name: {{ index .Values.networkPolicy.podSelector "app.kubernetes.io/name" | default "redis" }}
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: {{ .Values.helmChart.name }}-{{ .Values.helmChart.version }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ index .Values.networkPolicy.podSelector "app.kubernetes.io/instance" }}
+      app.kubernetes.io/name: {{ index .Values.networkPolicy.podSelector "app.kubernetes.io/name" }}
+
+  policyTypes:
+    - Ingress
+    - Egress
+
+  ingress:
+    - ports:
+        - port: {{ .Values.networkPolicy.port }}
+          protocol: {{ .Values.networkPolicy.protocol }}
+      from: []
+
+    - from:
+{{- range .Values.networkPolicy.allowedIPs }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+{{- end }}
+      ports:
+        - port: {{ .Values.networkPolicy.port }}
+          protocol: {{ .Values.networkPolicy.protocol }}
+
+  egress:
+    - {}
+{{- end }}

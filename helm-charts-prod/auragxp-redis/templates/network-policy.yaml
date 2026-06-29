@@ -1,0 +1,46 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/instance: auragxp-redis
+    app.kubernetes.io/name: redis
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: redis-25.3.2
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: auragxp-redis
+      app.kubernetes.io/name: redis
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Keep existing rule - allow from anywhere (for now)
+    - ports:
+        - port: 6379
+          protocol: TCP
+      from: []
+
+    # Add Function App specific IPs (these will be additional, not restrictive)
+    - from:
+        - ipBlock:
+            cidr: 52.247.236.35/32
+        - ipBlock:
+            cidr: 51.143.93.49/32
+        - ipBlock:
+            cidr: 13.77.180.121/32
+        - ipBlock:
+            cidr: 51.143.1.17/32
+        - ipBlock:
+            cidr: 51.143.103.177/32
+        - ipBlock:
+            cidr: 52.175.202.25/32
+      ports:
+        - port: 6379
+          protocol: TCP
+
+  egress:
+    # Keep egress as is (allow all)
+    - {}

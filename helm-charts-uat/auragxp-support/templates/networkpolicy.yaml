@@ -1,0 +1,52 @@
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Values.networkPolicy.name }}
+  namespace: {{ .Values.namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      app: {{ .Values.appName }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow traffic from Istio Ingress Gateway
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.istioIngress.namespace }}
+          podSelector:
+            matchLabels:
+              {{- range $key, $value := .Values.networkPolicy.istioIngress.podSelector }}
+              {{ $key }}: {{ $value | quote }}
+              {{- end }}
+      ports:
+        - protocol: {{ .Values.networkPolicy.protocol }}
+          port: {{ .Values.networkPolicy.port }}
+    
+    {{- if .Values.networkPolicy.authProxy.enabled }}
+    # Allow traffic from auth-proxy
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: {{ .Values.networkPolicy.authProxy.appName }}
+      ports:
+        - protocol: {{ .Values.networkPolicy.protocol }}
+          port: {{ .Values.networkPolicy.port }}
+    {{- end }}
+  
+  egress:
+    {{- if .Values.networkPolicy.egress.allowAll }}
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+    {{- else }}
+    - to:
+        {{- range .Values.networkPolicy.egress.allowedCIDRs }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+        {{- end }}
+    {{- end }}
+{{- end }}

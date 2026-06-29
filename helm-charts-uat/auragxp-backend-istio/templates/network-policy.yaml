@@ -1,0 +1,103 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Values.networkPolicy.name }}
+  namespace: {{ .Values.namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      app: {{ .Values.appName }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allows traffic ONLY from the Frontend
+    - from:
+        - podSelector:
+            matchLabels:
+              app: {{ .Values.frontend.appName }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.service.port }}
+    # Allow traffic from Istio Ingress Gateway
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.istio.ingressNamespace | default "aks-istio-ingress" }}
+          podSelector:
+            matchLabels:
+              app: aks-istio-ingressgateway-external
+      ports:
+        - protocol: TCP
+          port: {{ .Values.service.port }}
+  egress:
+    # Allow Backend to talk to PostgreSQL (CNPG)
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.database.cluster.namespace }}
+          podSelector:
+            matchLabels:
+              cnpg.io/cluster: auragxp-db-uat-cluster
+      ports:
+        - protocol: TCP
+          port: {{ .Values.networkPolicy.egress.dbPort }}
+
+    # Allow Backend to talk to Redis
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.redis.namespace }}
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/instance: auragxp-redis-uat
+              app.kubernetes.io/name: redis
+      ports:
+        - protocol: TCP
+          port: {{ .Values.networkPolicy.egress.redisPort }}
+
+    # Allow DNS
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: {{ .Values.networkPolicy.egress.dnsPort }}
+        - protocol: TCP
+          port: {{ .Values.networkPolicy.egress.dnsPort }}
+
+    # Allow external HTTPS calls (Key Vault/Azure APIs)
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - protocol: TCP
+          port: 443
+
+    # Allow Istio Control Plane (XDS)
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: istio-system
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: aks-istio-system
+      ports:
+        - protocol: TCP
+          port: {{ .Values.networkPolicy.egress.istioControlPlanePort }}
+
+    # Allow Backend to talk to Keycloak for token validation
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.keycloak.namespace }}
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/managed-by: keycloak-operator
+      ports:
+        - protocol: TCP
+          port: {{ .Values.keycloak.port }}

@@ -1,0 +1,213 @@
+# Namespace Configuration
+namespace: auragxp-uat
+
+# Domain Configuration
+domain: auragxp-uat.auratrace.ai
+
+# Service Account Configuration
+serviceAccount:
+  create: false
+  name: auragxp-serviceaccount-uat
+  clientId: e09e2815-5e84-47c7-b4e2-6070e08ae362
+  tenantId: 788f6d9e-1a66-4385-9aee-01da8900e00b
+
+# Istio Configuration
+istio:
+  gatewayName: watershed-istio-gateway
+  hostname: auragxp-uat.auratrace.ai
+  tlsSecretName: auraqpos-uat.auragxp-com-tls-secret
+  ingressNamespace: aks-istio-ingress
+  ingressGatewaySelector: aks-istio-ingressgateway-external
+
+# Service Names
+services:
+  frontend:
+    name: auragxp-frontend-uat
+    port: 3000
+  backend:
+    name: auragxp-backend-uat
+    port: 3901
+  support:
+    name: auragxp-support-uat
+    port: 80
+  keycloak:
+    namespace: auragxp-keycloak-uat
+    serviceName: keycloak-service
+    port: 8080
+
+# Database Configuration
+database:
+  cluster:
+    readWriteHost: auragxp-db-uat-cluster-rw.auragxp-db-uat.svc.cluster.local
+    readOnlyHost: auragxp-db-uat-cluster-ro.auragxp-db-uat.svc.cluster.local
+    maxConnections: 100
+    http1MaxPendingRequests: 10
+    maxRequestsPerConnection: 10
+
+# Redis Configuration
+redis:
+  host: auragxp-redis-uat-master.auragxp-db-uat.svc.cluster.local
+
+# External Services
+externalServices:
+  scorm:
+    host: saauragxpuatlms.z13.web.core.windows.net
+    port: 443
+
+# Certificate Configuration
+certificate:
+  issuerRef:
+    name: letsencrypt-prod
+    kind: ClusterIssuer
+  certificateNamespace: aks-istio-ingress
+  commonName: auragxp-uat.auratrace.ai
+
+# Peer Authentication
+peerAuthentication:
+  name: auragxp-uat-pa
+  mtlsMode: PERMISSIVE
+
+# VirtualService Configuration
+virtualService:
+  name: auragxp-main-vs
+  timeout: 30s
+
+# Network Policy
+networkPolicy:
+  enabled: true
+  defaultDenyName: default-deny-all
+  dnsName: allow-dns
+  acmeEnabled: true
+  acmeName: "allow-acme-challenge"
+  istioNamespace: "aks-istio-ingress"
+  keycloakOperatorName: "allow-keycloak-operator"
+  keycloakDbAccessName: "allow-keycloak-db-access"
+  keycloakDnsName: "allow-keycloak-dns"
+
+# ============ CSI Driver Configuration for Azure Key Vault ============
+csiKeyVault:
+  enabled: true
+  secretProviderClassName: "auragxp-azure-keyvault-uat"
+  syncedK8sSecretName: "kv-auragxp-uat-eus-sh"
+  frontendSecretProviderClassName: "auragxp-frontend-kv-uat"
+  frontendSyncedSecretName: "auragxp-frontend-secrets-uat"
+
+  # Key Vault connection details
+  vaultName: "kv-auragxp-uat-eus-sh"
+  vaultUrl: "https://kv-auragxp-uat-eus-sh.vault.azure.net/"
+  tenantId: "788f6d9e-1a66-4385-9aee-01da8900e00b"
+
+  # Workload Identity details
+  clientId: "e09e2815-5e84-47c7-b4e2-6070e08ae362"
+
+  # ALL secrets from your inventory (35+ secrets)
+  objects:
+    array:
+      - objectName: "PORT"
+        objectType: secret
+      - objectName: "SP-ENV"
+        objectType: secret
+      - objectName: "DB-HOST"
+        objectType: secret
+      - objectName: "DB-PORT"
+        objectType: secret
+      - objectName: "DB-USER"
+        objectType: secret
+      - objectName: "DB-PASSWORD"
+        objectType: secret
+      - objectName: "DB-NAME"
+        objectType: secret
+      - objectName: "AZURE-TENANT-ID"
+        objectType: secret
+      - objectName: "AZURE-CLIENT-ID"
+        objectType: secret
+      - objectName: "AZURE-CLIENT-SECRET"
+        objectType: secret
+      - objectName: "AZURE-STORAGE-CONTAINER-NAME"
+        objectType: secret
+      - objectName: "AZURE-STORAGE-ACCOUNT-NAME"
+        objectType: secret
+      - objectName: "AZURE-STORAGE-CONNECTION-STRING"
+        objectType: secret
+      - objectName: "SHAREPOINT-SITE-ID"
+        objectType: secret
+      - objectName: "SHAREPOINT-DRIVE-ID"
+        objectType: secret
+      - objectName: "BACKEND-KEYCLOAK-ISSUER"
+        objectType: secret
+      - objectName: "BACKEND-KEYCLOAK-CLIENT-ID"
+        objectType: secret
+      - objectName: "BACKEND-KEYCLOAK-CLIENT-SECRET"
+        objectType: secret
+      - objectName: "BACKEND-KEYCLOAK-REDIRECT-URI"
+        objectType: secret
+      - objectName: "BACKEND-KEYCLOAK-ADMIN-CLIENT-ID"
+        objectType: secret
+      - objectName: "BACKEND-KEYCLOAK-ADMIN-CLIENT-SECRET"
+        objectType: secret
+      - objectName: "BACKEND-KC-BASE-URL"
+        objectType: secret
+      - objectName: "BACKEND-KEYCLOAK-REALM"
+        objectType: secret
+      - objectName: "BACKEND-KEYCLOAK-AUDIENCE"
+        objectType: secret
+      - objectName: "BACKEND-KEYCLOAK-JWKS"
+        objectType: secret
+      - objectName: "LICENSE-SERVER-URL"
+        objectType: secret
+      - objectName: "LICENSE-CLIENT-ID"
+        objectType: secret
+      - objectName: "LICENSE-CLIENT-SECRET"
+        objectType: secret
+      - objectName: "KEYCLOAK-ADMIN"
+        objectType: secret
+      - objectName: "KEYCLOAK-ADMIN-PASSWORD"
+        objectType: secret
+      - objectName: "KC-DB-USERNAME"
+        objectType: secret
+      - objectName: "KC-DB-PASSWORD"
+        objectType: secret
+      - objectName: "COMMUNICATION-SERVICES-CONNECTION-STRING"
+        objectType: secret
+      - objectName: "ACS-SENDER-ADDRESS"
+        objectType: secret
+      - objectName: "DEV-URL"
+        objectType: secret
+      - objectName: "FUNCTION-APP-URL"
+        objectType: secret
+      - objectName: "NEXTAUTH-URL"
+        objectType: secret
+      - objectName: "NEXTAUTH-SECRET"
+        objectType: secret
+      - objectName: "POSTGRES-ADMIN-USER"
+        objectType: secret
+      - objectName: "REDIS-PASSWORD"
+        objectType: secret
+      - objectName: "ORG-PROVISION-FUNCTION-URL"
+        objectType: secret
+      - objectName: "ORG-SCHEMA-VERSION"
+        objectType: secret
+      - objectName: "TEMP-PASSWORD"
+        objectType: secret
+      - objectName: "WORKFLOW-EMAILS"
+        objectType: secret
+
+  # Frontend specific secrets
+  frontendObjects:
+    array:
+      - objectName: "NEXTAUTH-URL"
+        objectType: secret
+      - objectName: "NEXTAUTH-SECRET"
+        objectType: secret
+      - objectName: "KEYCLOAK-ISSUER"
+        objectType: secret
+      - objectName: "KEYCLOAK-CLIENT-ID"
+        objectType: secret
+      - objectName: "KEYCLOAK-CLIENT-SECRET"
+        objectType: secret
+
+# ACME Challenge Configuration
+acme:
+  solverPodName: cm-acme-http-solver-s2lvb
+  solverNamespace: aks-istio-ingress
+  solverPort: 8089

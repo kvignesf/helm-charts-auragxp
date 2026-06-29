@@ -1,0 +1,89 @@
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Values.networkPolicy.name }}
+  namespace: {{ .Values.namespace | default .Release.Namespace }}
+  labels:
+    {{- include "auragxp-frontend-devint2.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app: {{ .Values.appName }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    {{- if .Values.networkPolicy.ingress.fromIstioGateway.enabled }}
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.ingress.fromIstioGateway.gatewayNamespace }}
+          podSelector:
+            matchLabels:
+              {{- range $key, $value := .Values.networkPolicy.ingress.fromIstioGateway.gatewayLabelSelector }}
+              {{ $key }}: {{ $value | quote }}
+              {{- end }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.networkPolicy.ingress.fromIstioGateway.port }}
+    {{- end }}
+    {{- if .Values.networkPolicy.ingress.fromAuthProxy.enabled }}
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- range $key, $value := .Values.networkPolicy.ingress.fromAuthProxy.authProxyLabelSelector }}
+              {{ $key }}: {{ $value | quote }}
+              {{- end }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.networkPolicy.ingress.fromAuthProxy.port }}
+    {{- end }}
+  egress:
+    {{- if .Values.networkPolicy.egress.toDNS.enabled }}
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.egress.toDNS.dnsNamespace }}
+          podSelector:
+            matchLabels:
+              {{- range $key, $value := .Values.networkPolicy.egress.toDNS.dnsLabelSelector }}
+              {{ $key }}: {{ $value | quote }}
+              {{- end }}
+      ports:
+        {{- range .Values.networkPolicy.egress.toDNS.dnsPorts }}
+        - protocol: {{ .protocol }}
+          port: {{ .port }}
+        {{- end }}
+    {{- end }}
+    {{- if .Values.networkPolicy.egress.toExternalHTTPS.enabled }}
+    - to:
+        - ipBlock:
+            cidr: {{ .Values.networkPolicy.egress.toExternalHTTPS.externalCIDR }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.networkPolicy.egress.toExternalHTTPS.httpsPort }}
+    {{- end }}
+    {{- if .Values.networkPolicy.egress.toIstioControlPlane.enabled }}
+    - to:
+        {{- range .Values.networkPolicy.egress.toIstioControlPlane.istioNamespaces }}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ . }}
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.networkPolicy.egress.toIstioControlPlane.xdsPort }}
+    {{- end }}
+    {{- if .Values.networkPolicy.egress.toBackend.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- range $key, $value := .Values.networkPolicy.egress.toBackend.backendLabelSelector }}
+              {{ $key }}: {{ $value | quote }}
+              {{- end }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.networkPolicy.egress.toBackend.backendPort }}
+    {{- end }}
+{{- end }}

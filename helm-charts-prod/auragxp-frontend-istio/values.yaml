@@ -1,0 +1,88 @@
+replicaCount: 2
+
+image:
+  repository: acrauragxpappsprodesu.azurecr.io/frontend
+  tag: auragxp-v1.3-June2026
+  pullPolicy: Always
+
+service:
+  type: ClusterIP
+  port: 3000
+  targetPort: 3000
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 256Mi
+    ephemeral-storage: 500Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+    ephemeral-storage: 1Gi
+
+nodeSelector:
+  auragxp/deploy: application
+
+namespace: auragxp-prod
+
+# Istio Configuration
+istio:
+  enabled: true
+  host: auragxp.auratrace.ai
+  gateway: auragxp-prod/auragxp-istio-gateway
+  serviceName: auragxp-frontend
+
+# ADD THIS SECTION FOR POD ANNOTATIONS
+podAnnotations:
+  sidecar.istio.io/inject: "true"
+  proxy.istio.io/config: '{"holdApplicationUntilProxyStarts": true}'
+
+appName: auragxp-frontend
+backendAppName: auragxp-backend
+keycloakAppName: keycloak
+
+backendPort: 3901
+keycloakPort: 8080
+
+# CSI Driver Configuration for Azure Key Vault (similar to backend)
+csiKeyVault:
+  enabled: true
+  secretProviderClassName: "auragxp-frontend-kv-prod"
+  syncedK8sSecretName: "auragxp-frontend-secrets-prod"
+
+  # Key Vault connection details
+  vaultName: "kv-auraprod-esu"
+  vaultUrl: "https://kv-auraprod-esu.vault.azure.net/"
+  tenantId: "788f6d9e-1a66-4385-9aee-01da8900e00b"
+
+  # Workload Identity details
+  clientId: "5b2a0f44-83bf-4034-b0a9-ea002cadd130"
+
+  # Frontend specific secrets
+  objects:
+    array:
+      - objectName: "NEXTAUTH-SECRET"
+        objectType: secret
+      - objectName: "KEYCLOAK-CLIENT-SECRET"
+        objectType: secret
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 5
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 70
+
+podAntiAffinity:
+  enabled: true
+  preferredDuringScheduling: true
+
+networkPolicy:
+  enabled: true
+  name: auragxp-frontend-network-policy
+
+httpRoute:
+  enabled: false
+
+ingress:
+  enabled: false

@@ -1,0 +1,213 @@
+apiVersion: k8s.keycloak.org/v2alpha1
+kind: Keycloak
+metadata:
+  name: {{ .Release.Name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: keycloak
+    version: {{ .Values.keycloak.image | splitList ":" | last }}
+
+spec:
+  instances: {{ .Values.keycloak.replicas }}
+  startOptimized: false
+
+  image: {{ .Values.keycloak.image }}
+
+  hostname:
+    hostname: {{ .Values.keycloak.hostname }}
+    strict: false
+    strictBackchannel: false
+
+  ingress:
+    enabled: false
+
+  http:
+    httpEnabled: true
+    httpPort: 8080
+    httpsPort: 8443
+
+  db:
+    vendor: postgres
+    host: {{ .Values.keycloak.db.host }}
+    port: {{ .Values.keycloak.db.port }}
+    database: {{ .Values.keycloak.db.database }}
+    usernameSecret:
+      name: {{ .Values.csi.secretName }}
+      key: {{ .Values.csi.keyMappings.dbUsername }}
+    passwordSecret:
+      name: {{ .Values.csi.secretName }}
+      key: {{ .Values.csi.keyMappings.dbPassword }}
+
+  additionalOptions:
+    - name: proxy
+      value: edge
+    - name: proxy-headers
+      value: xforwarded
+    - name: hostname-strict
+      value: "false"
+    - name: hostname-strict-https
+      value: "false"
+    - name: http-relative-path
+      value: /keycloak
+    - name: health-enabled
+      value: "true"
+    - name: metrics-enabled
+      value: "true"
+
+  features:
+    enabled:
+      - token-exchange
+      - admin-fine-grained-authz
+    disabled: []
+
+  unsupported:
+    podTemplate:
+      metadata:
+        labels:
+          azure.workload.identity/use: "true"
+
+        annotations:
+          sidecar.istio.io/inject: "false"
+          prometheus.io/scrape: "true"
+          prometheus.io/port: "8080"
+          prometheus.io/path: "/metrics"
+
+      spec:
+        serviceAccountName: keycloak-pod-sa
+
+        affinity:
+          podAntiAffinity:
+            requiredDuringSchedulingIgnoredDuringExecution:
+              - labelSelector:
+                  matchExpressions:
+                    - key: app
+                      operator: In
+                      values:
+                        - keycloak
+                topologyKey: kubernetes.io/hostname
+
+          podAffinity:
+            preferredDuringSchedulingIgnoredDuringExecution:
+              - weight: 50
+                podAffinityTerm:
+                  labelSelector:
+                    matchExpressions:
+                      - key: app
+                        operator: In
+                        values:
+                          - keycloak
+                  topologyKey: topology.kubernetes.io/zone
+
+        topologySpreadConstraints:
+          - maxSkew: 1
+            topologyKey: kubernetes.io/hostname
+            whenUnsatisfiable: DoNotSchedule
+            labelSelector:
+              matchLabels:
+                app: keycloak
+
+        containers:
+          - name: keycloak
+            resources:
+              requests:
+                cpu: {{ .Values.keycloak.resources.requests.cpu }}
+                memory: {{ .Values.keycloak.resources.requests.memory }}
+                ephemeral-storage: 1Gi
+              limits:
+                cpu: {{ .Values.keycloak.resources.limits.cpu }}
+                memory: {{ .Values.keycloak.resources.limits.memory }}
+                ephemeral-storage: 2Gi
+
+            env:
+              - name: KC_PROXY
+                value: "edge"
+              - name: KC_PROXY_HEADERS
+                value: "xforwarded"
+              - name: KC_HOSTNAME
+                value: {{ .Values.keycloak.hostname }}
+              - name: KC_HOSTNAME_STRICT
+                value: "false"
+              - name: KC_HOSTNAME_STRICT_HTTPS
+                value: "false"
+              - name: KC_CACHE
+                value: "ispn"
+              - name: KC_HTTP_RELATIVE_PATH
+                value: "/keycloak"
+
+              - name: KC_BOOTSTRAP_ADMIN_USERNAME
+                valueFrom:
+                  secretKeyRef:
+                    name: {{ .Values.csi.secretName }}
+                    key: {{ .Values.csi.keyMappings.adminUsername }}
+
+              - name: KC_BOOTSTRAP_ADMIN_PASSWORD
+                valueFrom:
+                  secretKeyRef:
+                    name: {{ .Values.csi.secretName }}
+                    key: {{ .Values.csi.keyMappings.adminPassword }}
+
+              - name: KC_HEALTH_ENABLED
+                value: "true"
+              - name: KC_METRICS_ENABLED
+                value: "true"
+
+            startupProbe:
+              httpGet:
+                path: /keycloak/health/started
+                port: 9000
+                scheme: HTTP
+              initialDelaySeconds: 20
+              periodSeconds: 2
+              timeoutSeconds: 3
+              failureThreshold: 150
+
+            readinessProbe:
+              httpGet:
+                path: /keycloak/health/ready
+                port: 9000
+                scheme: HTTP
+              initialDelaySeconds: 20
+              periodSeconds: 10
+              timeoutSeconds: 5
+              successThreshold: 1
+              failureThreshold: 3
+
+            livenessProbe:
+              httpGet:
+                path: /keycloak/health/live
+                port: 9000
+                scheme: HTTP
+              initialDelaySeconds: 60
+              periodSeconds: 20
+              timeoutSeconds: 5
+              failureThreshold: 3
+
+            volumeMounts:
+              - name: secrets-store
+                mountPath: /mnt/secrets
+                readOnly: true
+              - name: tmp
+                mountPath: /tmp
+              - name: data
+                mountPath: /opt/keycloak/data
+
+        volumes:
+          - name: secrets-store
+            csi:
+              driver: secrets-store.csi.k8s.io
+              readOnly: true
+              volumeAttributes:
+                secretProviderClass: {{ .Release.Name }}-kv
+
+          - name: tmp
+            emptyDir: {}
+
+          - name: data
+            emptyDir: {}
+
+        securityContext:
+          fsGroup: 1000
+          runAsUser: 1000
+          runAsNonRoot: true
+
+        terminationGracePeriodSeconds: 60

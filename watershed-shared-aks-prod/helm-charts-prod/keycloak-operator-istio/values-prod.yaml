@@ -1,0 +1,69 @@
+namespace: watershed-keycloak
+
+keycloak:
+  replicas: 2
+  hostname: watershed.auratrace.ai
+  http:
+    enabled: true
+  image: quay.io/keycloak/keycloak:26.4.7
+
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 1536Mi
+
+  db:
+    host: watershed-db-cluster-rw.watershed-db.svc.cluster.local
+    port: 5432
+    database: watershed_kc_db
+    usernameSecret: kv-watershed-esu
+    passwordSecret: kv-watershed-esu
+
+podAnnotations:
+  sidecar.istio.io/inject: "false"
+
+istio:
+  gatewayName: auragxp-istio-gateway
+  virtualServiceName: watershed-main-vs
+
+csi:
+  clientId: "5b2a0f44-83bf-4034-b0a9-ea002cadd130"
+  tenantId: "788f6d9e-1a66-4385-9aee-01da8900e00b"
+  vaultName: "kv-watershed-esu"
+  secretName: kv-watershed-esu
+  keyMappings:
+    dbUsername: KC_DB_USERNAME
+    dbPassword: KC_DB_PASSWORD
+    adminUsername: KEYCLOAK_ADMIN
+    adminPassword: KEYCLOAK_ADMIN_PASSWORD
+
+certificate:
+  enabled: true
+  secretName: keycloak-tls
+  dnsNames:
+    - watershed.auratrace.ai
+  issuerRef:
+    name: letsencrypt-prod
+    kind: ClusterIssuer
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 3
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 70
+
+podAntiAffinity:
+  enabled: true
+  requiredDuringScheduling: true
+
+frontend:
+  host: watershed-frontend
+  port: 3000
+
+backend:
+  host: watershed-backend
+  port: 3901

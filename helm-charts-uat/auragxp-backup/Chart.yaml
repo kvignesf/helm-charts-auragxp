@@ -1,0 +1,6 @@
+apiVersion: v2
+name: auragxp-backup
+description: CNPG Scheduled Backup Chart for AuraGXP
+type: application
+version: 0.1.0
+appVersion: "1.0"

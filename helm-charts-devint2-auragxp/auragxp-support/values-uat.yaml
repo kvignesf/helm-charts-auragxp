@@ -1,0 +1,186 @@
+# Application configuration
+replicaCount: 2
+
+image:
+  repository: acrglobalwus.azurecr.io/auragxp/devint2/support
+  tag: "d8adf0de"
+  pullPolicy: Always
+
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 80
+  metricsPort: 9090
+
+resources:
+  requests:
+    cpu: 25m
+    memory: 128Mi
+    ephemeral-storage: 256Mi
+  limits:
+    cpu: 200m
+    memory: 256Mi
+    ephemeral-storage: 500Mi
+
+namespace: auragxp-devint2
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 4
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 70
+
+podAntiAffinity:
+  enabled: true
+
+# Application identity
+appName: auragxp-support-devint2
+appLabel: auragxp-support-devint2
+
+# Service account configuration
+serviceAccount:
+  create: false
+  name: default
+
+# Istio configuration
+istio:
+  enabled: true
+  sidecarInjection: true
+  holdApplicationUntilProxyStarts: true
+  tlsMode: DISABLE
+  proxyConfig: '{"holdApplicationUntilProxyStarts": true}'
+
+# Monitoring configuration
+monitoring:
+  prometheus:
+    scrape: true
+    port: "{{ .Values.service.targetPort }}"
+    path: "/metrics"
+
+# Probe configuration
+probes:
+  livenessProbe:
+    enabled: true
+    type: tcpSocket  # httpGet, tcpSocket, exec
+    port: 80
+    initialDelaySeconds: 20
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+  readinessProbe:
+    enabled: true
+    type: tcpSocket
+    port: 80
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    timeoutSeconds: 3
+    successThreshold: 1
+    failureThreshold: 3
+  startupProbe:
+    enabled: true
+    type: tcpSocket
+    port: 80
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    failureThreshold: 30
+
+# Deployment strategy
+deploymentStrategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxSurge: 1
+    maxUnavailable: 0
+
+# Pod Disruption Budget
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+  maxUnavailable: null
+
+# Network Policy configuration
+networkPolicy:
+  enabled: true
+  name: auragxp-support-devint2-network-policy
+  ingress:
+    enabled: true
+    rules:
+      - from:
+          - namespaceSelector:
+              matchLabels:
+                kubernetes.io/metadata.name: aks-istio-ingress
+            podSelector:
+              matchLabels:
+                app: aks-istio-ingressgateway-external
+        ports:
+          - protocol: TCP
+            port: 80
+      - from:
+          - podSelector:
+              matchLabels:
+                app.kubernetes.io/name: auth-proxy
+        ports:
+          - protocol: TCP
+            port: 80
+  egress:
+    enabled: true
+    rules:
+      - to:
+          - ipBlock:
+              cidr: 0.0.0.0/0
+
+# Topology spread constraints
+topologySpreadConstraints:
+  enabled: true
+  maxSkew: 1
+  topologyKey: kubernetes.io/hostname
+  whenUnsatisfiable: DoNotSchedule
+
+# Affinity
+affinity:
+  podAntiAffinity:
+    enabled: true
+    preferenceType: preferredDuringSchedulingIgnoredDuringExecution  # preferred or required
+    weight: 100
+    topologyKey: kubernetes.io/hostname
+
+# Node selection
+nodeSelector: {}
+
+tolerations: []
+
+# Environment variables
+env:
+  - name: POD_NAME
+    valueFrom:
+      fieldRef:
+        fieldPath: metadata.name
+  - name: POD_NAMESPACE
+    valueFrom:
+      fieldRef:
+        fieldPath: metadata.namespace
+  - name: NODE_NAME
+    valueFrom:
+      fieldRef:
+        fieldPath: spec.nodeName
+
+# Additional environment variables
+extraEnv: []
+
+# Termination grace period
+terminationGracePeriodSeconds: 30
+
+# Image pull secrets
+imagePullSecrets: []
+
+# Annotations
+podAnnotations: {}
+deploymentAnnotations: {}
+
+# Labels
+podLabels: {}
+deploymentLabels: {}
+
+# Security context
+podSecurityContext: {}
+containerSecurityContext: {}

@@ -1,0 +1,222 @@
+# Sample values for AuraGXP CNPG PostgreSQL Database
+# Use --set or --set-file for environment-specific overrides
+
+# Namespace Configuration
+namespace: auragxp-db-uat
+
+# Cluster Secret Store Configuration
+clusterSecretStore:
+  name: auragxp-clustersecretstore-uat
+  vaultUrl: https://kv-auragxp-uat-eus-sh.vault.azure.net/
+  tenantId: 788f6d9e-1a66-4385-9aee-01da8900e00b
+
+# Service Account for Workload Identity
+serviceAccount:
+  name: auragxp-serviceaccount-uat
+  clientId: e09e2815-5e84-47c7-b4e2-6070e08ae362
+  tenantId: 788f6d9e-1a66-4385-9aee-01da8900e00b
+
+# ===================== SERVICES CONFIGURATION =====================
+services:
+  enabled: true
+  internalAccess: false
+  externalAccess: true
+
+  # Azure Static Public IP
+  publicIPName: "auragxp-uat-db-pip"
+  loadBalancerResourceGroup: "rg-auragxp-level2-uat"
+
+  # Allowed Source IPs
+  allowedIPs:
+    - "52.233.72.160/32"
+    - "52.151.57.252/32"
+    - "52.175.226.60/32"
+    - "52.175.255.184/32"
+    - "52.151.63.62/32"
+    - "20.42.128.118/32"
+    - "52.229.30.210/32"
+    - "20.151.50.190/32"
+    - "115.99.76.18/32"
+
+  rw:
+    nodePort: 31101
+
+  ro:
+    nodePort: 31102
+# ===================== CSI Driver for Key Vault =====================
+csiKeyVault:
+  enabled: true
+  secretProviderClassName: "auragxp-db-kv-uat"
+  syncedK8sSecretName: "auragxp-cnpg-uat-admin-secret"
+  vaultName: "kv-auragxp-uat-eus-sh"
+  vaultUrl: "https://kv-auragxp-uat-eus-sh.vault.azure.net/"
+  tenantId: "788f6d9e-1a66-4385-9aee-01da8900e00b"
+  clientId: "e09e2815-5e84-47c7-b4e2-6070e08ae362"
+  objects:
+    array:
+      - objectName: POSTGRES-ADMIN-USER
+        objectType: secret
+      - objectName: POSTGRES-ADMIN-PASSWORD
+        objectType: secret
+      - objectName: POSTGRES-DB
+        objectType: secret
+      - objectName: CNPG-STORAGE-ACCOUNT-KEY
+        objectType: secret
+      - objectName: CNPG-STORAGE-ACCOUNT
+        objectType: secret
+
+# ===================== CLUSTER CONFIGURATION =====================
+cluster:
+  name: auragxp-db-uat-cluster
+  namespace: auragxp-db-uat
+  description: "AuraGXP PostgreSQL Database"
+
+  instances: 2
+  storageSize: 50Gi
+
+  bootstrap:
+    database: aura_qpos_app_db
+    owner: aura_qpos_super_admin
+
+  adminUser:
+    name: aura_qpos_super_admin
+
+  appUser:
+    name: aura_qpos_app_user
+
+  keycloakUser:
+    name: aura_qpos_kc_admin
+
+  additionalDatabases:
+    - name: aura_qpos_kc_db
+      owner: aura_qpos_kc_admin
+
+  postgresql:
+    maxConnections: "500"
+    sharedBuffers: "1GB"
+    workMem: "32MB"
+    maintenanceWorkMem: "256MB"
+    effectiveCacheSize: "3GB"
+    checkpointTimeout: "15min"
+    checkpointCompletionTarget: "0.9"
+    walWriterDelay: "200ms"
+
+  roleGrants:
+    - role: aura_qpos_app_user
+      database: aura_qpos_app_db
+      privileges:
+        - CONNECT
+
+# ===================== NETWORK POLICY CONFIGURATION =====================
+networkPolicy:
+  enabled: true
+  defaultDenyName: default-deny-db
+  dnsName: allow-dns-db
+  postgresPort: 5432
+  cnpgOperatorPort: 8000
+  
+  # Namespace configurations
+  namespaces:
+    backend: auragxp-uat
+    keycloak: auragxp-keycloak-uat
+    cnpgOperator: cnpg-system
+    kubeSystem: kube-system
+  
+  # Pod label selectors
+  podSelectors:
+    backend:
+      app: auragxp-backend-uat
+    keycloak:
+      app.kubernetes.io/instance: auragxp-keycloak-uat
+    kubeDNS:
+      k8s-app: kube-dns
+  
+  # Additional namespaces that need access
+  additionalAllowedNamespaces:
+    - monitoring
+
+
+# ===================== BACKUP CONFIGURATION =====================
+backup:
+  destinationPath: https://sabackendwus.blob.core.windows.net/cnpg-daily-auragxp-uat
+  retentionPolicy: "7d"  # Override for prod with --set backup.retentionPolicy=30d
+  secretName: auragxp-cnpg-uat-admin-secret
+  # Backup schedule (cron format) - override for different environments
+  schedule: "0 0 * * *"  # Daily at midnight
+  walCompression: gzip
+  options:
+    - "--read-timeout=3600"
+    - "--write-timeout=3600"
+
+restore:
+  enabled: true
+
+  sourceClusterName: auragxp-db-cluster
+
+  cloneClusterName: auragxp-db-uat-cluster
+
+  instances: 2
+
+  storageSize: 50Gi
+
+  sourcePath: https://sabackendwus.blob.core.windows.net/cnpg-backups-auragxp-uat
+
+  targetTime: ""
+
+  secretName: auragxp-cnpg-uat-admin-secret
+
+  postgresql:
+    maxConnections: "500"
+    sharedBuffers: "1GB"
+
+  resources:
+    requests:
+      cpu: "500m"
+      memory: "1Gi"
+
+    limits:
+      cpu: "2"
+      memory: "4Gi"
+
+# ===================== MONITORING CONFIGURATION =====================
+monitoring:
+  enabled: true
+  podMonitor:
+    enabled: true
+    interval: 30s
+    scrapeTimeout: 10s
+
+# ===================== RESOURCE CONFIGURATION =====================
+resources:
+  requests:
+    cpu: "500m"
+    memory: "1Gi"
+  limits:
+    cpu: "2"
+    memory: "4Gi"
+
+# ===================== AFFINITY & HIGH AVAILABILITY =====================
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          labelSelector:
+            matchExpressions:
+              - key: cnpg.io/cluster
+                operator: In
+                values:
+                  - auragxp-db-uat-cluster
+          topologyKey: kubernetes.io/hostname
+
+tolerations: []
+nodeSelector: {}
+
+# ===================== ENVIRONMENT LABEL =====================
+environment: "uat"
+
+# ===================== CSI TEST POD =====================
+csiTestPod:
+  enabled: true
+  name: cnpg-secret-sync
+  image: busybox

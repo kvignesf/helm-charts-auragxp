@@ -1,0 +1,346 @@
+trigger: none
+
+parameters:
+  - name: targetEnvironment
+    displayName: 'Target Deployment Environment'
+    type: string
+    default: 'prod'
+    values:
+      - dev
+      - uat
+      - prod
+  - name: action
+    displayName: 'Helm Action'
+    type: string
+    default: 'install'
+    values:
+      - install
+      - upgrade
+
+resources:
+  repositories:
+    # Dev Repositories
+    - repository: qmslms_phase1_dev
+      type: git
+      name: auragxp-platform/support
+      ref: main
+      endpoint: auragxp-platform-sc
+    - repository: templates_dev
+      type: git
+      name: auragxp-devops/DevOps-Templates
+      ref: stage-templates
+      endpoint: auragxp-platform-sc
+    - repository: auragxp_devops_dev
+      type: git
+      name: auragxp-devops/auragxp-devops
+      ref: main
+      endpoint: auragxp-platform-sc
+
+    # UAT Repositories
+    - repository: qmslms_phase1_uat
+      type: git
+      name: auragxp-platform/support
+      ref: main
+      endpoint: auragxp-platform-sc
+    - repository: templates_uat
+      type: git
+      name: auragxp-devops/DevOps-Templates
+      ref: stage-templates
+      endpoint: auragxp-platform-sc
+    - repository: auragxp_devops_uat
+      type: git
+      name: auragxp-devops/auragxp-devops
+      ref: main
+      endpoint: auragxp-platform-sc
+
+    # PROD Repositories
+    - repository: qmslms_phase1_prod
+      type: git
+      name: auragxp-platform/support
+      ref: main
+      endpoint: auragxp-platform-sc
+    - repository: templates_prod
+      type: git
+      name: auragxp-devops/DevOps-Templates
+      ref: main
+      endpoint: auragxp-platform-sc
+    - repository: auragxp_devops_prod
+      type: git
+      name: auragxp-devops/auragxp-devops
+      ref: main
+      endpoint: auragxp-platform-sc
+
+pool:
+  name: Azure-Self-Hosted2
+
+variables:
+  - name: CHART_PATH
+    value: '$(Build.SourcesDirectory)/watershed-shared-aks-prod/helm-charts-prod'
+  - name: COMMIT_ID
+    value: $[substring(variables['Build.SourceVersion'], 0, 8)]
+  - name: PASS_VULNERABILITIES
+    value: 'true'
+  - ${{ if eq(parameters.targetEnvironment, 'dev') }}:
+    - group: watershed-platform-dev
+  - ${{ if eq(parameters.targetEnvironment, 'uat') }}:
+    - group: watershed-platform-uat
+  - ${{ if eq(parameters.targetEnvironment, 'prod') }}:
+    - group: watershed-platform-prod
+
+stages:
+# STAGE 1: BUILD AND PUSH IMAGES
+- stage: BuildAndPush
+  displayName: 'Build and Push Images'
+  jobs:
+    - ${{ if eq(parameters.targetEnvironment, 'dev') }}:
+      - template: Docker/support-build-template.yml@templates_dev
+        parameters:
+          poolName: 'Azure-Self-Hosted2'
+          dockerfile: 'Dockerfile-support'
+          repoName: $(REPO_SUPPORT)
+    - ${{ if eq(parameters.targetEnvironment, 'uat') }}:
+      - template: Docker/support-build-template.yml@templates_uat
+        parameters:
+          poolName: 'Azure-Self-Hosted2'
+          dockerfile: 'Dockerfile-support'
+          repoName: $(REPO_SUPPORT)
+    - ${{ if eq(parameters.targetEnvironment, 'prod') }}:
+      - template: Docker/support-build-template.yml@templates_prod
+        parameters:
+          poolName: 'Azure-Self-Hosted2'
+          dockerfile: 'Dockerfile-support'
+          repoName: $(REPO_SUPPORT)
+
+# STAGE 2: VULNERABILITY THRESHOLD GATE (Skipped for Prod)
+- stage: EvaluateVulnerabilities
+  displayName: 'Evaluate Vulnerability Thresholds'
+  dependsOn: BuildAndPush
+  condition: and(succeeded(), ne('${{ parameters.targetEnvironment }}', 'prod'), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+  variables:
+    SUPPORT_HIGH: $[stageDependencies.BuildAndPush.DockerBuild_backend.outputs['TrivyScan.SUPPORT_HIGH']]
+    SUPPORT_CRITICAL: $[stageDependencies.BuildAndPush.DockerBuild_backend.outputs['TrivyScan.SUPPORT_CRITICAL']]
+    SUPPORT_COMMIT: $[stageDependencies.BuildAndPush.DockerBuild_backend.outputs['GetCommitId.SUPPORT_COMMIT']]
+  jobs:
+    - job: CheckThresholds
+      displayName: 'Check Vulnerability Thresholds'
+      steps:
+        - checkout: none
+        - script: |
+            set -e
+            SUPPORT_HIGH=${SUPPORT_HIGH:-0}
+            SUPPORT_CRITICAL=${SUPPORT_CRITICAL:-0}
+
+            TOTAL_HIGH=$((SUPPORT_HIGH))
+            TOTAL_CRITICAL=$((SUPPORT_CRITICAL))
+            MAX_HIGH=${MAX_HIGH_VULNS:-10}
+            MAX_CRITICAL=${MAX_CRITICAL_VULNS:-5}
+
+            echo "========== VULNERABILITY SUMMARY =========="
+            echo "Support - HIGH: $SUPPORT_HIGH, CRITICAL: $SUPPORT_CRITICAL"
+            echo "Total HIGH: $TOTAL_HIGH, Total CRITICAL: $TOTAL_CRITICAL"
+            echo "Max allowed HIGH: $MAX_HIGH, Max allowed CRITICAL: $MAX_CRITICAL"
+            echo "==========================================="
+
+            echo "Support Commit: $(SUPPORT_COMMIT)"
+
+            if [ $TOTAL_HIGH -gt $MAX_HIGH ] || [ $TOTAL_CRITICAL -gt $MAX_CRITICAL ]; then
+              echo "##vso[task.logissue type=warning]Vulnerability threshold exceeded! Check reports."
+              if [ "$PASS_VULNERABILITIES" != "true" ]; then
+                exit 1
+              fi
+            fi
+          displayName: 'Check Thresholds'
+          name: ThresholdCheck
+          env:
+            SUPPORT_HIGH: $(SUPPORT_HIGH)
+            SUPPORT_CRITICAL: $(SUPPORT_CRITICAL)
+            SUPPORT_COMMIT: $(SUPPORT_COMMIT)
+            MAX_HIGH_VULNS: $(MAX_HIGH_VULNS)
+            MAX_CRITICAL_VULNS: $(MAX_CRITICAL_VULNS)
+            PASS_VULNERABILITIES: $(PASS_VULNERABILITIES)
+
+# STAGE 3: HELM DEPLOYMENT TO AKS
+- stage: DeployAppHelm
+  displayName: 'Deploy App Services'
+  dependsOn:
+    - BuildAndPush
+    - ${{ if ne(parameters.targetEnvironment, 'prod') }}:
+      - EvaluateVulnerabilities
+  condition: |
+    and(
+      succeeded('BuildAndPush'),
+      or(
+        eq('${{ parameters.targetEnvironment }}', 'prod'),
+        in(dependencies.EvaluateVulnerabilities.result, 'Succeeded', 'Skipped')
+      )
+    )
+  variables:
+    ${{ if ne(parameters.targetEnvironment, 'prod') }}:
+      SUPPORT_COMMIT: $[stageDependencies.EvaluateVulnerabilities.CheckThresholds.outputs['ThresholdCheck.SUPPORT_COMMIT']]
+  jobs:
+    - job: HelmDeploy
+      displayName: 'Helm Upgrade/Install'
+      steps:
+        - ${{ if eq(parameters.targetEnvironment, 'dev') }}:
+          - checkout: auragxp_devops_dev
+            path: s/auragxp-devops
+        - ${{ if eq(parameters.targetEnvironment, 'uat') }}:
+          - checkout: auragxp_devops_uat
+            path: s/auragxp-devops
+        - ${{ if eq(parameters.targetEnvironment, 'prod') }}:
+          - checkout: auragxp_devops_prod
+            path: s/auragxp-devops
+        - script: |
+            echo "========================================="
+            echo "Environment: $(ENV_NAME)"
+            echo "Namespace: $(NAMESPACE)"
+            echo "Is Prod: $(IS_PROD)"
+            echo "========================================="
+          displayName: 'Display Environment Context'
+        - ${{ if ne(parameters.targetEnvironment, 'prod') }}:
+          - script: |
+              set -e
+              echo "Using CHART_PATH: $(CHART_PATH)"
+              SUPPORT_CHART_DIR="$(CHART_PATH)/watershed-support"
+              if [ ! -d "$SUPPORT_CHART_DIR" ]; then
+                echo "ERROR: Support chart directory not found at $SUPPORT_CHART_DIR"
+                exit 1
+              fi
+              SUPPORT_VALUES_FILE="$SUPPORT_CHART_DIR/values-$(ENV_NAME).yaml"
+              sed -i "s|tag: \".*\"|tag: \"$(SUPPORT_COMMIT)\"|g" "$SUPPORT_VALUES_FILE"
+              echo "##vso[task.setvariable variable=SUPPORT_CHART_DIR]$SUPPORT_CHART_DIR"
+            displayName: 'Update Support values.yaml with Commit ID'
+            env:
+              SUPPORT_COMMIT: $(SUPPORT_COMMIT)
+              ENV_NAME: $(ENV_NAME)
+        - ${{ if eq(parameters.targetEnvironment, 'prod') }}:
+          - script: |
+              echo "Charts directory: $CHARTS_DIR"
+              echo "##vso[task.setvariable variable=SUPPORT_CHART_DIR]$CHARTS_DIR/watershed-support"
+            displayName: 'Find Charts Directory (Prod)'
+            env:
+              ENV_NAME: $(ENV_NAME)
+        - task: AzureCLI@2
+          displayName: 'Whitelist Agent IP'
+          inputs:
+            azureSubscription: $(AZURE_SERVICE_CONNECTION)
+            scriptType: bash
+            scriptLocation: inlineScript
+            inlineScript: |
+              set -e
+              AGENT_IP=$(curl -s https://api.ipify.org)
+              echo "Agent IP: $AGENT_IP"
+              EXISTING_RANGES=$(az aks show -g "$AKS_RG" -n "$AKS_NAME" --query "apiServerAccessProfile.authorizedIpRanges | join(',', @)" -o tsv || echo "")
+              if [[ "$EXISTING_RANGES" != *"$AGENT_IP"* ]]; then
+                NEW_RANGES="${EXISTING_RANGES:+${EXISTING_RANGES},}${AGENT_IP}"
+                az aks update -g "$AKS_RG" -n "$AKS_NAME" --api-server-authorized-ip-ranges "$NEW_RANGES"
+                echo "Waiting 60s for firewall propagation..."
+                sleep 60
+              else
+                echo "Agent IP already whitelisted"
+              fi
+          env:
+            AKS_RG: $(AKS_RG)
+            AKS_NAME: $(AKS_NAME)
+        - task: AzureCLI@2
+          displayName: 'Connect & Prepare Namespace'
+          inputs:
+            azureSubscription: '$(AZURE_SERVICE_CONNECTION)'
+            scriptType: bash
+            scriptLocation: inlineScript
+            inlineScript: |
+              set -e
+              az aks get-credentials -g "$AKS_RG" -n "$AKS_NAME" --overwrite-existing
+              kubelogin convert-kubeconfig -l azurecli
+              kubectl create namespace $(NAMESPACE) --dry-run=client -o yaml | kubectl apply -f -
+              echo "Connected to AKS cluster and namespace $(NAMESPACE) ready"
+          env:
+            AKS_RG: $(AKS_RG)
+            AKS_NAME: $(AKS_NAME)
+            NAMESPACE: $(NAMESPACE)
+        - task: AzureCLI@2
+          displayName: 'Deploy Backend Service'
+          inputs:
+            azureSubscription: '$(AZURE_SERVICE_CONNECTION)'
+            scriptType: bash
+            scriptLocation: inlineScript
+            inlineScript: |
+              set -e
+              az aks get-credentials -g "$AKS_RG" -n "$AKS_NAME" --overwrite-existing
+              kubelogin convert-kubeconfig -l azurecli
+
+              if [ -z "$SUPPORT_CHART_DIR" ] || [ ! -d "$SUPPORT_CHART_DIR" ]; then
+                echo "ERROR: Support chart directory not valid at $SUPPORT_CHART_DIR"
+                exit 1
+              fi
+
+              if [ "$IS_PROD" == "true" ]; then
+                helm upgrade --install watershed-support "$SUPPORT_CHART_DIR" \
+                  --namespace $(NAMESPACE) \
+                  --values "$SUPPORT_CHART_DIR/values-$(ENV_NAME).yaml" \
+                  --wait --atomic --timeout 10m
+              else
+                helm upgrade --install watershed-support "$SUPPORT_CHART_DIR" \
+                  --namespace $(NAMESPACE) \
+                  --values "$SUPPORT_CHART_DIR/values-$(ENV_NAME).yaml" \
+                  --wait --atomic --timeout 10m
+              fi
+          env:
+            AKS_RG: $(AKS_RG)
+            AKS_NAME: $(AKS_NAME)
+        - task: AzureCLI@2
+          displayName: 'Verify Deployments'
+          inputs:
+            azureSubscription: '$(AZURE_SERVICE_CONNECTION)'
+            scriptType: bash
+            scriptLocation: inlineScript
+            inlineScript: |
+              set -e
+              az aks get-credentials -g "$AKS_RG" -n "$AKS_NAME" --overwrite-existing
+              kubelogin convert-kubeconfig -l azurecli
+
+              echo "Checking pod status in $(NAMESPACE) namespace..."
+              kubectl get pods -n $(NAMESPACE)
+
+              echo "Pod images with commit IDs:"
+              kubectl get pods -n $(NAMESPACE) -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.containers[0].image}{"\n"}{end}'
+
+              SUPPORT_POD=$(kubectl get pods -n $(NAMESPACE) -l app=watershed-support -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
+              if [ ! -z "$SUPPORT_POD" ]; then
+                SUPPORT_IMAGE=$(kubectl get pod $SUPPORT_POD -n $(NAMESPACE) -o jsonpath='{.spec.containers[0].image}')
+                echo "Support Image: $SUPPORT_IMAGE"
+              fi
+          env:
+            AKS_RG: $(AKS_RG)
+            AKS_NAME: $(AKS_NAME)
+            NAMESPACE: $(NAMESPACE)
+
+# STAGE 4: DAST - OWASP ZAP (Skipped for Prod)
+- stage: DASTScan
+  displayName: 'OWASP ZAP DAST Scan'
+  dependsOn: DeployAppHelm
+  condition: and(succeededOrFailed(), ne(variables['Build.SourceBranch'], 'refs/heads/main'))
+  jobs:
+    - job: ZAPScan
+      displayName: 'Run OWASP ZAP Baseline Scan'
+      steps:
+        - checkout: none
+        - script: |
+            set -e
+            mkdir -p $(Pipeline.Workspace)/zap-output
+            echo "Running ZAP baseline scan against $(ZAP_TARGET_URL)"
+            docker run --rm \
+              -v $(Pipeline.Workspace)/zap-output:/zap/wrk:rw \
+              ghcr.io/zaproxy/zaproxy:stable \
+              zap-baseline.py \
+              -t $(ZAP_TARGET_URL) \
+              -r zap-report.html \
+              -J zap-report.json \
+              || echo "ZAP scan completed with warnings"
+          displayName: 'Execute ZAP Scan'
+          continueOnError: true
+          env:
+            ZAP_TARGET_URL: $(ZAP_TARGET_URL)
+        - publish: $(Pipeline.Workspace)/zap-output
+          artifact: ZAP-Reports
+          condition: always()

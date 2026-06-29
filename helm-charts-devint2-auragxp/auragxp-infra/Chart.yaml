@@ -1,0 +1,6 @@
+apiVersion: v2
+name: auragxp-infra-devint2
+description: Helm chart for deploying the Auragxp DevInt2 Kubernetes Infrastructure
+type: application
+version: 0.1.0
+appVersion: "1.0.0"

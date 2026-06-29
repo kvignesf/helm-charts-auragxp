@@ -1,0 +1,100 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: backend-istio-network-policy
+  namespace: auragxp-prod
+spec:
+  podSelector:
+    matchLabels:
+      app: auragxp-backend
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allows traffic ONLY from the Frontend
+    - from:
+        - podSelector:
+            matchLabels:
+              app: auragxp-frontend
+      ports:
+        - protocol: TCP
+          port: 3901
+    # Allow traffic from Istio Ingress Gateway
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: aks-istio-ingress
+          podSelector:
+            matchLabels:
+              app: aks-istio-ingressgateway-external
+      ports:
+        - protocol: TCP
+          port: 3901
+  egress:
+    # Allow Backend to talk to PostgreSQL (CNPG)
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: auragxp-db
+      ports:
+        - protocol: TCP
+          port: 5432
+    
+    # NEW: Allow Backend to talk to Redis in auragxp-db namespace
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: auragxp-db
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/instance: auragxp-redis
+              app.kubernetes.io/name: redis
+      ports:
+        - protocol: TCP
+          port: 6379
+    
+    # Allow DNS
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    
+    # Allow external HTTPS calls (Key Vault/Azure APIs)
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - protocol: TCP
+          port: 443
+    
+    # Allow Istio Control Plane (XDS)
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: istio-system
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: aks-istio-system
+      ports:
+        - protocol: TCP
+          port: 15012
+
+    # Allow Backend to talk to Keycloak for token validation
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: auragxp-keycloak
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/managed-by: keycloak-operator
+      ports:
+        - protocol: TCP
+          port: 8080

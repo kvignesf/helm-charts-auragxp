@@ -1,0 +1,52 @@
+# Default values for keycloak-operator
+namespace: auragxp-keycloak
+
+replicaCount: 1
+
+azure:
+  clientId: "5b2a0f44-83bf-4034-b0a9-ea002cadd130"
+
+image:
+  repository: quay.io/keycloak/keycloak-operator
+  tag: 26.4.7
+  pullPolicy: IfNotPresent
+
+serviceAccount:
+  name: keycloak-operator
+  create: true
+
+# RBAC configuration
+rbac:
+  create: true
+  clusterRoleName: keycloak-operator
+  clusterRoleBindingName: keycloak-operator
+
+# Watch namespace configuration
+watchNamespace: auragxp-keycloak
+operatorName: keycloak-operator
+
+# Resource limits and requests
+resources:
+  requests:
+    cpu: 50m
+    memory: 384Mi
+  limits:
+    cpu: 200m
+    memory: 512Mi
+
+# Additional environment variables
+extraEnv: []
+# - name: CUSTOM_ENV
+#   value: custom-value
+
+# Pod annotations
+podAnnotations: {}
+
+# Node selector
+nodeSelector: {}
+
+# Tolerations
+tolerations: []
+
+# Affinity
+affinity: {}

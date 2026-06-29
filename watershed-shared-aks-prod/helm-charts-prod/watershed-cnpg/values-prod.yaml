@@ -1,0 +1,174 @@
+# Sample values for watershed CNPG PostgreSQL Database
+
+namespace: watershed-db
+
+environment: prod
+
+serviceAccount:
+  create: true
+  name: watershed-serviceaccount
+  clientId: 5b2a0f44-83bf-4034-b0a9-ea002cadd130
+  tenantId: 788f6d9e-1a66-4385-9aee-01da8900e00b
+
+csiKeyVault:
+  enabled: true
+  secretProviderClassName: "watershed-db-kv-prod"
+  syncedK8sSecretName: "watershed-cnpg-admin-secret"
+  vaultName: "kv-watershed-esu"
+  vaultUrl: "https://kv-watershed-esu.vault.azure.net/"
+  tenantId: "788f6d9e-1a66-4385-9aee-01da8900e00b"
+  clientId: "5b2a0f44-83bf-4034-b0a9-ea002cadd130"
+  objects:
+    array:
+      - objectName: POSTGRES-ADMIN-USER
+        objectType: secret
+      - objectName: POSTGRES-ADMIN-PASSWORD
+        objectType: secret
+      - objectName: POSTGRES-DB
+        objectType: secret
+      - objectName: CNPG-STORAGE-ACCOUNT-KEY
+        objectType: secret
+      - objectName: CNPG-STORAGE-ACCOUNT
+        objectType: secret
+
+cluster:
+  name: watershed-db-cluster
+  namespace: watershed-db
+  description: "watershed PostgreSQL Database"
+  instances: 2
+  storageSize: 50Gi
+  imageName: ghcr.io/cloudnative-pg/postgresql:18.1
+  enableSuperuserAccess: true
+
+  bootstrap:
+    database: watershed_app_db
+    owner: watershed_super_admin
+
+  adminUser:
+    name: watershed_super_admin
+
+  postgresql:
+    maxConnections: "500"
+    sharedBuffers: "1GB"
+    workMem: "32MB"
+    maintenanceWorkMem: "256MB"
+    effectiveCacheSize: "3GB"
+    checkpointTimeout: "15min"
+    checkpointCompletionTarget: "0.9"
+    walWriterDelay: "200ms"
+
+# Backup storage destinations
+backup:
+  dailyDestinationPath: "https://stauragxpbackendprdesu.blob.core.windows.net/cnpg-daily-watershed"
+  weeklyDestinationPath: "https://stauragxpbackendprdesu.blob.core.windows.net/cnpg-weekly"
+  monthlyDestinationPath: "https://stauragxpbackendprdesu.blob.core.windows.net/cnpg-monthly"
+  retentionPolicy: "30d"
+  wal:
+    compression: gzip
+    maxParallel: 2
+  data:
+    compression: gzip
+    immediateCheckpoint: false
+
+# Restore configuration
+restore:
+  enabled: false
+  cloneClusterName: watershed-db-cluster
+  instances: 2
+  storageSize: 50Gi
+  sourcePath: https://stauragxpbackendprdesu.blob.core.windows.net/cnpg-backups
+  targetTime: ""
+  secretName: watershed-cnpg-admin-secret
+  postgresql:
+    maxConnections: "500"
+    sharedBuffers: "1GB"
+  resources:
+    requests:
+      cpu: "500m"
+      memory: "1Gi"
+    limits:
+      cpu: "2"
+      memory: "4Gi"
+
+# Service configuration
+services:
+  enabled: true
+  internalAccess: false
+  externalAccess: true
+  publicIPName: "watershed-prod-db-pip"
+  allowedIPs:
+    - "4.236.197.225/32"
+    - "4.236.197.242/32"
+    - "4.236.198.76/32"
+    - "4.236.198.109/32"
+    - "4.236.198.110/32"
+    - "4.236.198.141/32"
+    - "191.237.27.74/32"
+    - "40.121.16.193/32"
+    - "130.107.72.103/32"
+  rw:
+    nodePort: 32001
+  ro:
+    nodePort: 32002
+
+# Network Policy configuration
+networkPolicy:
+  enabled: true
+  defaultDenyName: default-deny-db
+  dnsName: allow-dns-db
+  frontendNamespace: watershed-prod
+  backendNamespace: watershed-prod
+  keycloakNamespace: watershed-keycloak
+  cnpgOperatorNamespace: cnpg-system
+  additionalAllowedNamespaces:
+    - watershed-keycloak
+    - monitoring
+  backendLabelSelector:
+    app: watershed-backend
+  keycloakLabelSelector:
+    app.kubernetes.io/instance: watershed-keycloak
+  operatorPort: 8000
+  kubeAPIPort: 443
+
+# Monitoring configuration
+monitoring:
+  enabled: true
+  podMonitor:
+    enabled: true
+    interval: 30s
+    scrapeTimeout: 10s
+
+# Resource configuration
+resources:
+  requests:
+    cpu: "500m"
+    memory: "1Gi"
+  limits:
+    cpu: "2"
+    memory: "4Gi"
+
+# Affinity configuration
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          labelSelector:
+            matchExpressions:
+              - key: cnpg.io/cluster
+                operator: In
+                values:
+                  - watershed-db-cluster
+          topologyKey: kubernetes.io/hostname
+
+tolerations: []
+nodeSelector: {}
+
+# Istio configuration
+istio:
+  sidecarInjection: false
+
+# CSI Driver configuration
+csi:
+  driverName: secrets-store.csi.k8s.io
+  mountPath: /mnt/secrets-store

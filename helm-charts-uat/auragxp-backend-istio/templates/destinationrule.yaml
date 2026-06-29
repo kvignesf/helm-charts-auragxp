@@ -1,0 +1,41 @@
+{{- if .Values.istio.enabled }}
+apiVersion: networking.istio.io/v1alpha3
+kind: DestinationRule
+metadata:
+  name: {{ .Values.istio.destinationRuleName }}
+  labels:
+    {{- include "backend.labels" . | nindent 4 }}
+spec:
+  host: {{ .Values.istio.serviceName }}
+  trafficPolicy:
+    tls:
+      mode: {{ .Values.istio.trafficPolicy.tlsMode }}
+    loadBalancer:
+      simple: {{ .Values.istio.trafficPolicy.loadBalancer }}
+    connectionPool:
+      tcp:
+        maxConnections: {{ .Values.istio.trafficPolicy.maxConnections }}
+      http:
+        http1MaxPendingRequests: {{ .Values.istio.trafficPolicy.http1MaxPendingRequests }}
+        maxRequestsPerConnection: {{ .Values.istio.trafficPolicy.maxRequestsPerConnection }}
+    outlierDetection:
+      consecutive5xxErrors: {{ .Values.istio.trafficPolicy.consecutive5xxErrors }}
+      interval: {{ .Values.istio.trafficPolicy.interval }}
+      baseEjectionTime: {{ .Values.istio.trafficPolicy.baseEjectionTime }}
+      maxEjectionPercent: {{ .Values.istio.trafficPolicy.maxEjectionPercent }}
+  subsets:
+  - name: v1
+    labels:
+      version: v1
+---
+apiVersion: networking.istio.io/v1alpha3
+kind: DestinationRule
+metadata:
+  name: {{ .Values.appName }}-db-mtls-disabled
+  namespace: {{ .Values.namespace }}
+spec:
+  host: {{ .Values.database.cluster.readWriteHost }}
+  trafficPolicy:
+    tls:
+      mode: DISABLE
+{{- end }}

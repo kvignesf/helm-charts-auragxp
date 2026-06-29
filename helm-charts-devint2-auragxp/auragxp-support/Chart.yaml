@@ -1,0 +1,7 @@
+apiVersion: v2
+name: auragxp-support-devint2
+description: Helm chart for auragxp DevInt2 Support (VitePress static site)
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
+

@@ -1,0 +1,54 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: keycloak-operator
+  namespace: {{ .Values.namespace }}
+rules:
+- apiGroups: ["*"]
+  resources: ["*"]
+  verbs: ["*"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: keycloak-operator
+  namespace: {{ .Values.namespace }}
+subjects:
+- kind: ServiceAccount
+  name: keycloak-operator
+  namespace: {{ .Values.namespace }}
+roleRef:
+  kind: Role
+  name: keycloak-operator
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: keycloak-pod-sa
+  namespace: {{ .Values.namespace }}
+  annotations:
+    azure.workload.identity/client-id: "{{ .Values.csi.clientId }}"
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: keycloak-pod-viewer
+  namespace: {{ .Values.namespace }}
+rules:
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: keycloak-pod-viewer-binding
+  namespace: {{ .Values.namespace }}
+subjects:
+- kind: ServiceAccount
+  name: keycloak-pod-sa
+roleRef:
+  kind: Role
+  name: keycloak-pod-viewer
+  apiGroup: rbac.authorization.k8s.io

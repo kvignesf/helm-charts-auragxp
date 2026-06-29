@@ -1,0 +1,338 @@
+# Application configuration
+replicaCount: 2
+
+image:
+  repository: acrglobalwus.azurecr.io/auragxp/devint2/backend
+  tag: "4c7afd35"
+  pullPolicy: Always
+  pullSecrets: []
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 256Mi
+    ephemeral-storage: 1Gi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+    ephemeral-storage: 1Gi
+
+nodeSelector:
+  workload: application
+
+service:
+  type: ClusterIP
+  port: 3901
+  targetPort: 3901
+  name: http
+
+secrets:
+  name: kv-agxp-dev-eus-sh
+
+# Network Policy configuration
+networkPolicy:
+  enabled: true
+  name: backend-istio-network-policy
+  ingress:
+    fromFrontend:
+      enabled: true
+      frontendLabelSelector:
+        app: auragxp-frontend-devint2
+      port: 3901
+    fromIstioGateway:
+      enabled: true
+      gatewayNamespace: aks-istio-ingress
+      gatewayLabelSelector:
+        app: aks-istio-ingressgateway-external
+      port: 3901
+  egress:
+    toPostgres:
+      enabled: true
+      postgresNamespace: auragxp-db-devint2
+      postgresPort: 5432
+    toRedis:
+      enabled: true
+      redisNamespace: auragxp-db-devint2
+      redisLabelSelector:
+        app.kubernetes.io/instance: auragxp-redis-devint2
+        app.kubernetes.io/name: redis
+      redisPort: 6379
+    toDNS:
+      enabled: true
+      dnsNamespace: kube-system
+      dnsLabelSelector:
+        k8s-app: kube-dns
+      dnsPorts:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    toExternalHTTPS:
+      enabled: true
+      externalCIDR: 0.0.0.0/0
+      httpsPort: 443
+    toIstioControlPlane:
+      enabled: true
+      istioNamespaces:
+        - istio-system
+        - aks-istio-system
+      xdsPort: 15012
+    toKeycloak:
+      enabled: true
+      keycloakNamespace: auragxp-keycloak-devint2
+      keycloakLabelSelector:
+        app.kubernetes.io/managed-by: keycloak-operator
+      keycloakPort: 8080
+
+namespace: auragxp-devint2
+appName: auragxp-backend-devint2
+frontendAppName: auragxp-frontend-devint2
+dbPort: 5432
+
+# Autoscaling configuration
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 6
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 70
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Percent
+          value: 50
+          periodSeconds: 60
+    scaleUp:
+      stabilizationWindowSeconds: 0
+      policies:
+        - type: Percent
+          value: 100
+          periodSeconds: 15
+        - type: Pods
+          value: 2
+          periodSeconds: 15
+      selectPolicy: Max
+
+# Pod Anti-Affinity configuration
+podAntiAffinity:
+  enabled: true
+  preferredDuringScheduling: true
+  requiredDuringScheduling: false
+  weight: 100
+  topologyKey: kubernetes.io/hostname
+
+# Pod Affinity configuration
+podAffinity:
+  enabled: true
+  preferredDuringScheduling: true
+  weight: 50
+  topologyKey: topology.kubernetes.io/zone
+
+# Topology spread constraints
+topologySpreadConstraints:
+  enabled: true
+  constraints:
+    - maxSkew: 1
+      topologyKey: kubernetes.io/hostname
+      whenUnsatisfiable: ScheduleAnyway
+    - maxSkew: 1
+      topologyKey: topology.kubernetes.io/zone
+      whenUnsatisfiable: ScheduleAnyway
+
+# Istio configuration
+istio:
+  enabled: true
+  host: dev-ph2.auratrace.ai
+  gatewayName: aks-istio-ingress/watershed-istio-gateway
+  serviceName: auragxp-backend-devint2
+  path: /api/
+  tlsMode: ISTIO_MUTUAL
+  loadBalancer:
+    simple: LEAST_CONN
+  connectionPool:
+    tcp:
+      maxConnections: 1000
+    http:
+      http1MaxPendingRequests: 100
+      maxRequestsPerConnection: 100
+  outlierDetection:
+    consecutive5xxErrors: 5
+    interval: 10s
+    baseEjectionTime: 30s
+    maxEjectionPercent: 10
+  subsets:
+    - name: v1
+      labels:
+        version: v1
+  dbDestinationRule:
+    enabled: true
+    dbHost: auragxp-db-devint2-cluster-rw.auragxp-db-devint2.svc.cluster.local
+    tlsMode: DISABLE
+
+# Pod annotations
+podAnnotations:
+  sidecar.istio.io/inject: "true"
+  proxy.istio.io/config: '{"holdApplicationUntilProxyStarts": true}'
+  prometheus.io/scrape: "true"
+  prometheus.io/port: "3901"
+  prometheus.io/path: "/metrics"
+
+# Ingress (disabled when using Istio)
+ingress:
+  enabled: false
+
+# CSI Driver Configuration for Azure Key Vault
+csiKeyVault:
+  enabled: true
+  secretProviderClassName: "auragxp-azure-keyvault-devint2"
+  syncedK8sSecretName: "kv-agxp-dev-eus-sh"
+  vaultName: "kv-agxp-dev-eus-sh"
+  vaultUrl: "https://kv-agxp-dev-eus-sh.vault.azure.net/"
+  tenantId: "788f6d9e-1a66-4385-9aee-01da8900e00b"
+  clientId: "e09e2815-5e84-47c7-b4e2-6070e08ae362"
+  driverName: secrets-store.csi.k8s.io
+  mountPath: /mnt/secret
+  objects:
+    array:
+      - objectName: "PORT"
+        objectType: secret
+      - objectName: "SP-ENV"
+        objectType: secret
+      - objectName: "DB-HOST"
+        objectType: secret
+      - objectName: "DB-PORT"
+        objectType: secret
+      - objectName: "DB-USER"
+        objectType: secret
+      - objectName: "DB-PASSWORD"
+        objectType: secret
+      - objectName: "DB-NAME"
+        objectType: secret
+      - objectName: "AZURE-TENANT-ID"
+        objectType: secret
+      - objectName: "AZURE-CLIENT-ID"
+        objectType: secret
+      - objectName: "AZURE-CLIENT-SECRET"
+        objectType: secret
+      - objectName: "AZURE-STORAGE-CONNECTION-STRING"
+        objectType: secret
+      - objectName: "SHAREPOINT-SITE-ID"
+        objectType: secret
+      - objectName: "SHAREPOINT-DRIVE-ID"
+        objectType: secret
+      - objectName: "BACKEND-KEYCLOAK-ISSUER"
+        objectType: secret
+      - objectName: "BACKEND-KEYCLOAK-CLIENT-ID"
+        objectType: secret
+      - objectName: "BACKEND-KEYCLOAK-CLIENT-SECRET"
+        objectType: secret
+      - objectName: "BACKEND-KEYCLOAK-REDIRECT-URI"
+        objectType: secret
+      - objectName: "BACKEND-KEYCLOAK-ADMIN-CLIENT-ID"
+        objectType: secret
+      - objectName: "BACKEND-KEYCLOAK-ADMIN-CLIENT-SECRET"
+        objectType: secret
+      - objectName: "BACKEND-KC-BASE-URL"
+        objectType: secret
+      - objectName: "BACKEND-KEYCLOAK-REALM"
+        objectType: secret
+      - objectName: "BACKEND-KEYCLOAK-AUDIENCE"
+        objectType: secret
+      - objectName: "BACKEND-KEYCLOAK-JWKS"
+        objectType: secret
+      - objectName: "LICENSE-SERVER-URL"
+        objectType: secret
+      - objectName: "LICENSE-CLIENT-ID"
+        objectType: secret
+      - objectName: "LICENSE-CLIENT-SECRET"
+        objectType: secret
+      - objectName: "KEYCLOAK-ADMIN"
+        objectType: secret
+      - objectName: "KEYCLOAK-ADMIN-PASSWORD"
+        objectType: secret
+      - objectName: "KC-DB-USERNAME"
+        objectType: secret
+      - objectName: "KC-DB-PASSWORD"
+        objectType: secret
+      - objectName: "COMMUNICATION-SERVICES-CONNECTION-STRING"
+        objectType: secret
+      - objectName: "ACS-SENDER-ADDRESS"
+        objectType: secret
+      - objectName: "DEV-URL"
+        objectType: secret
+      - objectName: "REDIS-PASSWORD"
+        objectType: secret
+      - objectName: "ORG-PROVISION-FUNCTION-URL"
+        objectType: secret
+      - objectName: "ORG-SCHEMA-VERSION"
+        objectType: secret
+      - objectName: "TEMP-PASSWORD"
+        objectType: secret
+
+# Environment variables
+env:
+  - name: NODE_ENV
+    value: "uat"
+
+# Database configuration
+database:
+  host: auragxp-db-devint2-cluster-rw.auragxp-db-devint2.svc.cluster.local
+  port: "5432"
+  redisHost: auragxp-redis-devint2-master.auragxp-db-devint2.svc.cluster.local
+  redisPort: "6379"
+
+# Probe configuration
+probes:
+  livenessProbe:
+    enabled: true
+    type: tcpSocket
+    port: 3901
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+  readinessProbe:
+    enabled: true
+    type: tcpSocket
+    port: 3901
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    timeoutSeconds: 3
+    successThreshold: 1
+    failureThreshold: 3
+  startupProbe:
+    enabled: true
+    type: tcpSocket
+    port: 3901
+    initialDelaySeconds: 10
+    periodSeconds: 5
+    failureThreshold: 30
+
+# Deployment strategy
+deploymentStrategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxSurge: 1
+    maxUnavailable: 0
+
+# Pod Disruption Budget
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+# Service account
+serviceAccount:
+  name: auragxp-serviceaccount-devint2
+  create: false
+
+# Termination grace period
+terminationGracePeriodSeconds: 60
+
+# Tolerations
+tolerations: []
+
+# Additional labels and annotations
+deploymentLabels: {}
+deploymentAnnotations: {}
+podLabels: {}

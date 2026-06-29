@@ -1,0 +1,11 @@
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: azure-scorm-dr
+  namespace: auragxp-prod
+spec:
+  host: stesuauragxpprdlms.z13.web.core.windows.net
+  trafficPolicy:
+    tls:
+      mode: SIMPLE
+

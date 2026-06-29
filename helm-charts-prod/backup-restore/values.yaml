@@ -1,0 +1,45 @@
+namespace: auragxp-db
+clusterName: auragxp-db-cluster
+
+# ── Three separate storage containers ─────────────────────────────
+backup:
+  # WAL + daily base backups land here (incremental)
+  dailyDestinationPath: "https://stauragxpbackendprdesu.blob.core.windows.net/cnpg-daily"
+  # Weekly full backups land here
+  weeklyDestinationPath: "https://stauragxpbackendprdesu.blob.core.windows.net/cnpg-weekly"
+  # Monthly full backups land here
+  monthlyDestinationPath: "https://stauragxpbackendprdesu.blob.core.windows.net/cnpg-monthly"
+  secretName: auragxp-cnpg-admin-secret
+  storageAccount: stauragxpbackendprdesu
+  retentionPolicy: "30d"
+
+# ── Daily incremental ─────────────────────────────────────────────
+dailyBackup:
+  enabled: true
+  name: auragxp-daily-backup
+  schedule: "0 0 2 * * *"
+
+# ── Weekly full backup ────────────────────────────────────────────
+weeklyBackup:
+  enabled: true
+  name: auragxp-weekly-backup
+  schedule: "0 0 1 * * 0"
+  immediate: true
+
+# ── Monthly full backup ───────────────────────────────────────────
+monthlyBackup:
+  enabled: true
+  name: auragxp-monthly-backup
+  schedule: "0 0 1 1 * *"  # At 01:00 on 1st of every month
+  immediate: false
+
+# ── Monitoring ─────────────────────────────────────────────────────
+monitoring:
+  enabled: true
+  alertFor: "5m"
+  severity: "warning"
+
+# ── Network Policy ─────────────────────────────────────────────────
+networkPolicy:
+  enabled: true
+  allowAzureEgress: true

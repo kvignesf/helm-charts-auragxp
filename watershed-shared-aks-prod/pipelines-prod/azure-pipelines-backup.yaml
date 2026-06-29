@@ -1,0 +1,158 @@
+trigger: none
+
+pool:
+  name: "Azure-Self-Hosted2"
+
+parameters:
+  - name: environment
+    displayName: 'Environment'
+    type: string
+    default: 'prod'
+    values:
+      - prod
+      - uat
+      - dev
+
+
+variables:
+  - name: CHART_PATH
+    value: '$(Build.SourcesDirectory)/watershed-shared-aks-prod/helm-charts-prod'
+  - ${{ if eq(parameters.environment, 'dev') }}:
+    - group: watershed-platform-dev
+  - ${{ if eq(parameters.environment, 'uat') }}:
+    - group: watershed-platform-uat
+  - ${{ if eq(parameters.environment, 'prod') }}:
+    - group: watershed-platform-prod
+
+resources:
+  repositories:
+    - repository: auragxp_devops
+      type: git
+      name: auragxp-devops/auragxp-devops
+      ref: main
+      endpoint: auragxp-platform-sc
+
+stages:
+  - stage: Deploy_Backup_Restore
+    displayName: 'Deploy Backup-Restore Helm Chart to AKS'
+    jobs:
+      - job: Backup_Restore_Deployment
+        displayName: 'Backup-Restore Helm Chart Installation'
+        pool:
+          name: 'Azure-Self-Hosted2'
+        steps:
+          # Checkout Infrastructure Repository
+          - checkout: auragxp_devops
+            path: s/auragxp-devops
+            persistCredentials: true
+            displayName: 'Checkout DevOps Repository'
+
+          # Whitelist Agent IP FIRST before attempting any AKS connection
+          - task: AzureCLI@2
+            displayName: 'Whitelist Agent IP'
+            inputs:
+              azureSubscription: '$(AZURE_SERVICE_CONNECTION)'
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                set -e
+
+                AGENT_IP=$(curl -s https://api.ipify.org)
+                echo "Agent IP: $AGENT_IP"
+
+                EXISTING_RANGES=$(az aks show \
+                  --resource-group "$AKS_RG" \
+                  --name "$AKS_NAME" \
+                  --query "apiServerAccessProfile.authorizedIpRanges | join(',', @)" \
+                  -o tsv || echo "")
+
+                if [[ "$EXISTING_RANGES" != *"$AGENT_IP"* ]]; then
+                  NEW_RANGES="${EXISTING_RANGES:+${EXISTING_RANGES},}${AGENT_IP}"
+                  az aks update \
+                    --resource-group "$AKS_RG" \
+                    --name "$AKS_NAME" \
+                    --api-server-authorized-ip-ranges "$NEW_RANGES"
+                  echo "Waiting for firewall rules to propagate..."
+                  sleep 60
+                else
+                  echo "Agent IP already whitelisted"
+                fi
+            env:
+              AKS_RG: $(AKS_RG)
+              AKS_NAME: $(AKS_NAME)
+
+          # Connect to AKS - only after IP is whitelisted
+          - task: AzureCLI@2
+            displayName: 'Connect to AKS'
+            inputs:
+              azureSubscription: '$(AZURE_SERVICE_CONNECTION)'
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                set -e
+
+                az aks get-credentials \
+                  --resource-group "$AKS_RG" \
+                  --name "$AKS_NAME" \
+                  --overwrite-existing
+
+                echo "Verifying cluster connectivity..."
+                kubectl get nodes
+            env:
+              AKS_RG: $(AKS_RG)
+              AKS_NAME: $(AKS_NAME)
+
+          # Install Backup-Restore Helm Chart
+          - task: AzureCLI@2
+            displayName: 'Install Backup-Restore Helm Chart'
+            inputs:
+              azureSubscription: '$(AZURE_SERVICE_CONNECTION)'
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                set -e
+
+                echo "========================================="
+                echo "Installing Backup-Restore Helm Chart"
+                echo "========================================="
+
+                # Ensure kubectl is connected
+                az aks get-credentials \
+                  --resource-group "$AKS_RG" \
+                  --name "$AKS_NAME" \
+                  --overwrite-existing
+
+                # Verify chart exists
+                if [ ! -d "$(CHART_PATH)/backup-restore" ]; then
+                  echo "ERROR: backup-restore chart not found at $(CHART_PATH)/backup-restore"
+                  echo "Available charts in $(CHART_PATH):"
+                  ls -la $(CHART_PATH)/
+                  exit 1
+                fi
+
+                echo "Found backup-restore chart at $(CHART_PATH)/backup-restore"
+
+                # Install/Upgrade backup-restore
+                echo "Installing/Upgrading backup-restore chart..."
+                helm upgrade --install backup-restore-watershed \
+                  $(CHART_PATH)/backup-restore \
+                  --namespace watershed-db-prod \
+                  --values $(CHART_PATH)/backup-restore/values-${{ parameters.environment }}.yaml \
+                  --wait \
+                  --timeout 5m \
+                  --atomic
+
+                echo "✓ Backup-Restore Helm chart installed/upgraded successfully"
+                
+                echo ""
+                echo "========================================="
+                echo "DEPLOYMENT COMPLETED"
+                echo "========================================="
+                echo "Environment: ${{ parameters.environment }}"
+                echo "Namespace: watershed-db"
+                echo "Chart: Backup-Restore"
+                echo "========================================="
+            env:
+              AKS_RG: $(AKS_RG)
+              AKS_NAME: $(AKS_NAME)
+              CHART_PATH: $(CHART_PATH)

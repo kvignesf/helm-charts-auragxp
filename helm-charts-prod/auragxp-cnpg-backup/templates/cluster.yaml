@@ -1,0 +1,70 @@
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: {{ .Values.cluster.name }}
+  namespace: {{ .Values.cluster.namespace }}
+
+spec:
+  description: {{ .Values.cluster.description }}
+  instances: {{ .Values.cluster.instances }}
+  enableSuperuserAccess: true
+
+
+  bootstrap:
+    initdb:
+      database: {{ .Values.cluster.bootstrap.database }}
+      owner: {{ .Values.cluster.bootstrap.owner }}
+      secret:
+        name: {{ .Values.csiKeyVault.syncedK8sSecretName }}
+
+  # ── WAL archiving — streams continuously to daily container ──────
+  backup:
+    barmanObjectStore:
+      destinationPath: {{ .Values.backup.dailyDestinationPath }}
+      azureCredentials:
+        storageAccount:
+          name: {{ .Values.csiKeyVault.syncedK8sSecretName }}
+          key: CNPG_STORAGE_ACCOUNT
+        storageKey:
+          name: {{ .Values.csiKeyVault.syncedK8sSecretName }}
+          key: CNPG_STORAGE_ACCOUNT_KEY
+      wal:
+        compression: gzip
+        maxParallel: 2
+      data:
+        compression: gzip
+        immediateCheckpoint: false
+    retentionPolicy: {{ .Values.backup.retentionPolicy | quote }}
+
+  storage:
+    size: {{ .Values.cluster.storageSize }}
+
+  postgresql:
+    parameters:
+      max_connections: "{{ .Values.cluster.postgresql.maxConnections }}"
+      shared_buffers: "{{ .Values.cluster.postgresql.sharedBuffers }}"
+      work_mem: "{{ .Values.cluster.postgresql.workMem }}"
+      maintenance_work_mem: "{{ .Values.cluster.postgresql.maintenanceWorkMem }}"
+
+  podTemplate:
+    metadata:
+      annotations:
+        sidecar.istio.io/inject: "false"
+
+    spec:
+      serviceAccountName: {{ .Values.serviceAccount.name }}
+
+      volumes:
+        - name: secrets-store-inline
+          csi:
+            driver: secrets-store.csi.k8s.io
+            readOnly: true
+            volumeAttributes:
+              secretProviderClass: {{ .Values.csiKeyVault.secretProviderClassName }}
+
+      containers:
+        - name: postgres
+          volumeMounts:
+            - name: secrets-store-inline
+              mountPath: "/mnt/secrets-store"
+              readOnly: true

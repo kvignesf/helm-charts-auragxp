@@ -1,0 +1,59 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: keycloak-egress
+  namespace: {{ .Release.Namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      app: keycloak
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  policyTypes:
+    - Egress
+
+  egress:
+
+    #Allow Keycloak pod-to-pod clustering (JGroups)
+    - to:
+        - podSelector:
+            matchLabels:
+              app: keycloak
+      ports:
+        - protocol: TCP
+          port: 7800     # JGroups cluster port
+        - protocol: TCP
+          port: 57800    # FD_SOCK2 port
+
+    #Allow DB access (PostgreSQL CNPG)
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: auragxp-db
+          podSelector:
+            matchLabels:
+              cnpg.io/cluster: auragxp-db-cluster
+      ports:
+        - protocol: TCP
+          port: 5432
+
+    #Allow DNS resolution
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+
+    #Allow outbound HTTPS (Azure AD, Key Vault, external services)
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - protocol: TCP
+          port: 443

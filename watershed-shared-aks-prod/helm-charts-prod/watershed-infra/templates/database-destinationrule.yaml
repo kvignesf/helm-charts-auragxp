@@ -1,0 +1,27 @@
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: watershed-db-cluster
+  namespace: {{ .Release.Namespace }}
+spec:
+  host: {{ .Values.istio.dbClusterHost }}
+  trafficPolicy:
+    tls:
+      mode: DISABLE
+    connectionPool:
+      tcp:
+        maxConnections: 100
+      http:
+        http1MaxPendingRequests: 10
+        maxRequestsPerConnection: 10
+---
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: watershed-db-cluster-ro
+  namespace: {{ .Release.Namespace }}
+spec:
+  host: {{ .Values.istio.dbClusterRoHost }}
+  trafficPolicy:
+    tls:
+      mode: DISABLE

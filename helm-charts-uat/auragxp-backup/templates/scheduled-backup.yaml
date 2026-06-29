@@ -1,0 +1,10 @@
+apiVersion: postgresql.cnpg.io/v1
+kind: ScheduledBackup
+metadata:
+  name: {{ .Values.scheduledBackup.name }}
+  namespace: {{ .Values.namespace }}
+spec:
+  schedule: "{{ .Values.scheduledBackup.schedule }}"
+  backupOwnerReference: self
+  cluster:
+    name: {{ .Values.clusterName }}

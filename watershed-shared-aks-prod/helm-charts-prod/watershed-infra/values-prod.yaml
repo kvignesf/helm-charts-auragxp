@@ -1,0 +1,182 @@
+# Namespace Configuration
+namespace: watershed-prod
+
+# Environment name (used across templates)
+environment: prod
+
+# Service Account Configuration
+serviceAccount:
+  create: true
+  name: watershed-serviceaccount
+  clientId: 5b2a0f44-83bf-4034-b0a9-ea002cadd130
+  tenantId: 788f6d9e-1a66-4385-9aee-01da8900e00b
+
+# Istio Configuration
+istio:
+  gatewayName: auragxp-istio-gateway
+  gatewayNamespace: auragxp-prod
+  hostname: watershed.auratrace.ai
+  tlsSecretName: watershed.auratrace.ai-tls-secret
+  backendService: watershed-backend
+  backendPort: 3901
+  frontendService: watershed-frontend
+  frontendPort: 3000
+  keycloakService: keycloak-service
+  keycloakNamespace: watershed-keycloak
+  keycloakPort: 8080
+  supportService: watershed-support
+  supportPort: 80
+  grafanaService: monitoring-grafana
+  grafanaNamespace: monitoring
+  grafanaPort: 80
+  scormHost: stesuwatershedprdlms.z13.web.core.windows.net
+  dbClusterHost: watershed-db-cluster-rw.watershed-db.svc.cluster.local
+  dbClusterRoHost: watershed-db-cluster-ro.watershed-db.svc.cluster.local
+  redisHost: watershed-redis-master.watershed-db.svc.cluster.local
+
+# Certificate Configuration
+certificate:
+  name: watershed.auratrace.ai-tls-v2
+  commonName: watershed.auratrace.ai
+  dnsNames:
+    - watershed.auratrace.ai
+  issuerRef:
+    kind: ClusterIssuer
+    name: letsencrypt-prod
+  secretName: watershed.auratrace.ai-tls-secret
+  reflectorEnabled: true
+  reflectorAllowedNamespaces: "watershed-prod, aks-istio-ingress"
+
+# Network Policy
+networkPolicy:
+  enabled: true
+  defaultDenyName: default-deny-all
+  dnsName: allow-dns
+  acmeEnabled: true
+  acmeName: "allow-acme-challenge"
+  acmeLabel: "acme.cert-manager.io/http01-solver"
+  acmeLabelValue: "true"
+  istioNamespace: "watershed-prod"
+  keycloakOperatorName: "allow-keycloak-operator"
+  keycloakDbAccessName: "allow-keycloak-db-access"
+  keycloakDnsName: "allow-keycloak-dns"
+
+# CSI Driver Configuration for Azure Key Vault
+csiKeyVault:
+  enabled: true
+  secretProviderClassName: "watershed-azure-keyvault-prod"
+  frontendSecretProviderClassName: "watershed-frontend-kv-prod"
+  syncedK8sSecretName: "kv-watershed-esu"
+  frontendSyncedSecretName: "watershed-frontend-secrets-prod"
+
+  # Key Vault connection details
+  vaultName: "kv-watershed-esu"
+  vaultUrl: "https://kv-watershed-esu.vault.azure.net/"
+  tenantId: "788f6d9e-1a66-4385-9aee-01da8900e00b"
+
+  # Workload Identity details
+  clientId: "5b2a0f44-83bf-4034-b0a9-ea002cadd130"
+
+  # ALL secrets from your inventory (35+ secrets)
+  objects:
+    array:
+      - objectName: "PORT"
+        objectType: secret
+      - objectName: "SP-ENV"
+        objectType: secret
+      - objectName: "DB-HOST"
+        objectType: secret
+      - objectName: "DB-PORT"
+        objectType: secret
+      - objectName: "DB-USER"
+        objectType: secret
+      - objectName: "DB-PASSWORD"
+        objectType: secret
+      - objectName: "DB-NAME"
+        objectType: secret
+      - objectName: "AZURE-TENANT-ID"
+        objectType: secret
+      - objectName: "AZURE-CLIENT-ID"
+        objectType: secret
+      - objectName: "AZURE-CLIENT-SECRET"
+        objectType: secret
+      - objectName: "AZURE-STORAGE-CONNECTION-STRING"
+        objectType: secret
+      - objectName: "SHAREPOINT-SITE-ID"
+        objectType: secret
+      - objectName: "SHAREPOINT-DRIVE-ID"
+        objectType: secret
+      - objectName: "BACKEND-KEYCLOAK-ISSUER"
+        objectType: secret
+      - objectName: "BACKEND-KEYCLOAK-CLIENT-ID"
+        objectType: secret
+      - objectName: "BACKEND-KEYCLOAK-CLIENT-SECRET"
+        objectType: secret
+      - objectName: "BACKEND-KEYCLOAK-REDIRECT-URI"
+        objectType: secret
+      - objectName: "BACKEND-KEYCLOAK-ADMIN-CLIENT-ID"
+        objectType: secret
+      - objectName: "BACKEND-KEYCLOAK-ADMIN-CLIENT-SECRET"
+        objectType: secret
+      - objectName: "BACKEND-KC-BASE-URL"
+        objectType: secret
+      - objectName: "BACKEND-KEYCLOAK-REALM"
+        objectType: secret
+      - objectName: "BACKEND-KEYCLOAK-AUDIENCE"
+        objectType: secret
+      - objectName: "BACKEND-KEYCLOAK-JWKS"
+        objectType: secret
+      - objectName: "LICENSE-SERVER-URL"
+        objectType: secret
+      - objectName: "LICENSE-CLIENT-ID"
+        objectType: secret
+      - objectName: "LICENSE-CLIENT-SECRET"
+        objectType: secret
+      - objectName: "KEYCLOAK-ADMIN"
+        objectType: secret
+      - objectName: "KEYCLOAK-ADMIN-PASSWORD"
+        objectType: secret
+      - objectName: "KC-DB-USERNAME"
+        objectType: secret
+      - objectName: "KC-DB-PASSWORD"
+        objectType: secret
+      - objectName: "COMMUNICATION-SERVICES-CONNECTION-STRING"
+        objectType: secret
+      - objectName: "ACS-SENDER-ADDRESS"
+        objectType: secret
+      - objectName: "DEV-URL"
+        objectType: secret
+      - objectName: "NEXTAUTH-URL"
+        objectType: secret
+      - objectName: "NEXTAUTH-SECRET"
+        objectType: secret
+      - objectName: "POSTGRES-ADMIN-USER"
+        objectType: secret
+      - objectName: "REDIS-PASSWORD"
+        objectType: secret
+      - objectName: "ORG-PROVISION-FUNCTION-URL"
+        objectType: secret
+      - objectName: "ORG-SCHEMA-VERSION"
+        objectType: secret
+      - objectName: "TEMP-PASSWORD"
+        objectType: secret
+
+  # Frontend specific secrets
+  frontendObjects:
+    array:
+      - objectName: "NEXTAUTH-URL"
+        objectType: secret
+      - objectName: "NEXTAUTH-SECRET"
+        objectType: secret
+      - objectName: "KEYCLOAK-ISSUER"
+        objectType: secret
+      - objectName: "KEYCLOAK-CLIENT-ID"
+        objectType: secret
+      - objectName: "KEYCLOAK-CLIENT-SECRET"
+        objectType: secret
+
+# ACME Challenge Configuration
+acme:
+  solverPodName: cm-acme-http-solver-jcc5d
+  solverNamespace: watershed-prod
+  solverPort: 8089

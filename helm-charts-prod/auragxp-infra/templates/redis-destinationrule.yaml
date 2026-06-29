@@ -1,0 +1,10 @@
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: auragxp-redis-mtls-disabled
+  namespace: auragxp-prod
+spec:
+  host: auragxp-redis-master.auragxp-db.svc.cluster.local
+  trafficPolicy:
+    tls:
+      mode: DISABLE

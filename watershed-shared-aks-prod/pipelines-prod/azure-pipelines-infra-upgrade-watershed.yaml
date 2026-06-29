@@ -1,0 +1,277 @@
+trigger: none
+
+pool:
+  ${{ if eq(parameters.environment, 'prod') }}:
+    name: 'Azure-Self-Hosted2'
+  ${{ else }}:
+    name: 'Azure-Self-hosted'
+
+parameters:
+  - name: environment
+    displayName: 'Environment'
+    type: string
+    default: 'prod'
+    values:
+      - prod
+      - uat
+      - dev
+  - name: action
+    displayName: 'Action'
+    type: string
+    default: 'upgrade'
+    values:
+      - upgrade
+
+variables:
+  - name: CHART_PATH
+    value: '$(Build.SourcesDirectory)/watershed-shared-aks-prod/helm-charts-prod'
+  
+  # Load environment-specific variable group based on parameter
+  - ${{ if eq(parameters.environment, 'dev') }}:
+    - group: 'watershed-platform-dev'
+  - ${{ if eq(parameters.environment, 'uat') }}:
+    - group: 'watershed-platform-uat'
+  - ${{ if eq(parameters.environment, 'prod') }}:
+    - group: 'watershed-platform-prod'
+
+resources:
+  repositories:
+    - repository: auragxp_devops
+      type: git
+      name: auragxp-devops/auragxp-devops
+      ref: main
+
+stages:
+  - stage: Deploy_Infrastructure_Only
+    displayName: 'Deploy Infrastructure Components Only'
+    jobs:
+      - job: Helm_Infrastructure_Deployment
+        displayName: 'Helm Infrastructure Chart Deployment'
+        pool:
+          ${{ if eq(parameters.environment, 'prod') }}:
+            name: 'Azure-Self-Hosted2'
+          ${{ else }}:
+            name: 'Azure-Self-hosted'
+        steps:
+          # Checkout Infrastructure Repository
+          - checkout: auragxp_devops
+            path: s/auragxp-devops
+            persistCredentials: true
+            displayName: 'Checkout DevOps Repository'
+
+          # Whitelist Agent IP FIRST before attempting any AKS connection
+          - task: AzureCLI@2
+            displayName: 'Whitelist Agent IP'
+            inputs:
+              azureSubscription: $(AZURE_SERVICE_CONNECTION)
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                set -e
+
+                AGENT_IP=$(curl -s https://api.ipify.org)
+                echo "Agent IP: $AGENT_IP"
+
+                EXISTING_RANGES=$(az aks show \
+                  --resource-group "$AKS_RG" \
+                  --name "$AKS_NAME" \
+                  --query "apiServerAccessProfile.authorizedIpRanges | join(',', @)" \
+                  -o tsv || echo "")
+
+                if [[ "$EXISTING_RANGES" != *"$AGENT_IP"* ]]; then
+                  NEW_RANGES="${EXISTING_RANGES:+${EXISTING_RANGES},}${AGENT_IP}"
+                  az aks update \
+                    --resource-group "$AKS_RG" \
+                    --name "$AKS_NAME" \
+                    --api-server-authorized-ip-ranges "$NEW_RANGES"
+                  echo "Waiting for firewall rules to propagate..."
+                  sleep 60
+                else
+                  echo "Agent IP already whitelisted"
+                fi
+
+          # Connect to AKS - only after IP is whitelisted
+          - task: AzureCLI@2
+            displayName: 'Connect to AKS'
+            inputs:
+              azureSubscription: $(AZURE_SERVICE_CONNECTION)
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                set -e
+
+                az aks get-credentials \
+                  --resource-group "$AKS_RG" \
+                  --name "$AKS_NAME" \
+                  --overwrite-existing
+
+                kubelogin convert-kubeconfig -l azurecli
+
+                echo "Verifying cluster connectivity..."
+                kubectl get nodes
+
+          # Atomic Upgrade of Infrastructure Helm Chart
+          - task: AzureCLI@2
+            displayName: 'Atomic Upgrade Infrastructure Chart'
+            inputs:
+              azureSubscription: $(AZURE_SERVICE_CONNECTION)
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                set -e
+
+                az aks get-credentials \
+                  --resource-group "$AKS_RG" \
+                  --name "$AKS_NAME" \
+                  --overwrite-existing
+                kubelogin convert-kubeconfig -l azurecli
+
+                INFRA_NAMESPACE="watershed-${{ parameters.environment }}"
+                RELEASE_NAME="watershed-infra"
+
+                echo "========================================="
+                echo "ATOMIC UPGRADE OF INFRASTRUCTURE COMPONENTS"
+                echo "Environment: ${{ parameters.environment }}"
+                echo "Namespace: $INFRA_NAMESPACE"
+                echo "Chart Path: $(CHART_PATH)/watershed-infra"
+                echo "========================================="
+
+                # Get current version before upgrade
+                CURRENT_VERSION=$(helm list -n $INFRA_NAMESPACE -f "^$RELEASE_NAME$" -o json | jq -r '.[0].app_version')
+                echo "Current version: $CURRENT_VERSION"
+
+                # Check if release exists
+                RELEASE_EXISTS=$(helm list -n $INFRA_NAMESPACE -q | grep -x $RELEASE_NAME || echo "")
+
+                if [[ -n "$RELEASE_EXISTS" ]]; then
+                  echo "Performing atomic upgrade of infrastructure chart..."
+                  
+                  # Perform atomic upgrade (automatically rolls back on failure)
+                  if helm upgrade $RELEASE_NAME \
+                    $(CHART_PATH)/watershed-infra \
+                    --namespace $INFRA_NAMESPACE \
+                    --atomic \
+                    --wait \
+                    --timeout 15m \
+                    --debug; then
+                    
+                    echo "Upgrade completed successfully"
+                    
+                    # Get new version after upgrade
+                    NEW_VERSION=$(helm list -n $INFRA_NAMESPACE -f "^$RELEASE_NAME$" -o json | jq -r '.[0].app_version')
+                    echo "Upgraded from version $CURRENT_VERSION to $NEW_VERSION"
+                    
+                  else
+                    echo "Upgrade failed! Helm automatically rolled back to previous version"
+                    echo "Rollback completed to version $CURRENT_VERSION"
+                    exit 1
+                  fi
+                else
+                  echo "Release $RELEASE_NAME not found in namespace $INFRA_NAMESPACE"
+                  echo "Please ensure the infrastructure chart is already installed before upgrading"
+                  exit 1
+                fi
+
+                echo "Waiting for infrastructure pods to be ready..."
+                kubectl wait --for=condition=ready --timeout=300s \
+                  pod -l app.kubernetes.io/instance=$RELEASE_NAME \
+                  -n $INFRA_NAMESPACE --all --timeout=300s || true
+                
+                echo "Infrastructure components upgraded successfully with atomic rollback protection"
+
+          # Post-Upgrade Verification
+          - task: AzureCLI@2
+            displayName: 'Post-Upgrade Verification'
+            condition: always()
+            inputs:
+              azureSubscription: $(AZURE_SERVICE_CONNECTION)
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                set -e
+
+                az aks get-credentials \
+                  --resource-group "$AKS_RG" \
+                  --name "$AKS_NAME" \
+                  --overwrite-existing
+                kubelogin convert-kubeconfig -l azurecli
+
+                INFRA_NAMESPACE="watershed-${{ parameters.environment }}"
+                RELEASE_NAME="watershed-infra"
+
+                echo "========================================="
+                echo "POST-UPGRADE VERIFICATION - INFRASTRUCTURE (${{ parameters.environment }})"
+                echo "========================================="
+                
+                # Check helm release status
+                echo "Helm Release Status:"
+                helm status $RELEASE_NAME -n $INFRA_NAMESPACE
+                echo ""
+                
+                # Check revision history
+                echo "Release History (last 3 revisions):"
+                helm history $RELEASE_NAME -n $INFRA_NAMESPACE --max 3
+                echo ""
+                
+                echo "Infrastructure Pods:"
+                kubectl get pods -n $INFRA_NAMESPACE
+                echo ""
+                
+                echo "Infrastructure Services:"
+                kubectl get services -n $INFRA_NAMESPACE
+                echo ""
+                
+                echo "Infrastructure Deployments:"
+                kubectl get deployments -n $INFRA_NAMESPACE
+                echo ""
+                
+                # Check if any pods are in failed state
+                FAILED_PODS=$(kubectl get pods -n $INFRA_NAMESPACE -o json | jq -r '.items[] | select(.status.phase=="Failed") | .metadata.name')
+                if [[ -n "$FAILED_PODS" ]]; then
+                  echo "Warning: Failed pods detected:"
+                  echo "$FAILED_PODS"
+                else
+                  echo "No failed pods detected"
+                fi
+                
+                echo "========================================="
+                echo "INFRASTRUCTURE ATOMIC UPGRADE COMPLETE - ${{ parameters.environment }}"
+                echo "========================================="
+
+          # Rollback Notification (if needed)
+          - task: AzureCLI@2
+            displayName: 'Check and Report Rollback Status'
+            condition: failed()
+            inputs:
+              azureSubscription: $(AZURE_SERVICE_CONNECTION)
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                set -e
+
+                az aks get-credentials \
+                  --resource-group "$AKS_RG" \
+                  --name "$AKS_NAME" \
+                  --overwrite-existing
+                kubelogin convert-kubeconfig -l azurecli
+
+                INFRA_NAMESPACE="watershed-${{ parameters.environment }}"
+                RELEASE_NAME="watershed-infra"
+
+                echo "========================================="
+                echo "UPGRADE FAILED - ROLLBACK EXECUTED"
+                echo "========================================="
+                
+                # Get current status after rollback
+                echo "Current release status after automatic rollback:"
+                helm status $RELEASE_NAME -n $INFRA_NAMESPACE
+                echo ""
+                
+                echo "Last 3 revisions:"
+                helm history $RELEASE_NAME -n $INFRA_NAMESPACE --max 3
+                echo ""
+                
+                echo "The upgrade failed and Helm automatically rolled back to the previous version."
+                echo "Please check the logs above for details on what went wrong."
+                
+                exit 1

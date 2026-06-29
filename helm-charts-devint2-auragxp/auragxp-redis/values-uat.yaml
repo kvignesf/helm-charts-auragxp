@@ -1,0 +1,118 @@
+redis:
+  networkPolicy:
+    enabled: false
+
+  architecture: replication
+
+  auth:
+    enabled: true
+    existingSecret: auragxp-redis-devint2-auth
+    existingSecretPasswordKey: redis-password
+
+  master:
+    persistence:
+      enabled: true
+      size: 8Gi
+      accessModes:
+        - ReadWriteOnce
+
+    service:
+      type: LoadBalancer
+      ports:
+        redis: 6379
+      loadBalancerSourceRanges:
+        - "52.233.72.160/32"
+        - "52.151.57.252/32"
+        - "52.175.226.60/32"
+        - "52.175.255.184/32"
+        - "52.151.63.62/32"
+        - "20.42.128.118/32"
+        - "52.229.30.210/32"
+        - "20.151.50.190/32"
+        - "202.83.44.245/32"
+      annotations:
+        service.beta.kubernetes.io/azure-pip-name: "global-non-prod-redis-pip"
+        service.beta.kubernetes.io/azure-load-balancer-resource-group: "RG-Shared-Common"
+        service.beta.kubernetes.io/azure-load-balancer-internal: "false"
+        service.beta.kubernetes.io/azure-load-balancer-health-probe-protocol: "tcp"
+
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 300m
+        memory: 256Mi
+
+    extraVolumes:
+      - name: redis-secrets-store
+        csi:
+          driver: secrets-store.csi.k8s.io
+          readOnly: true
+          volumeAttributes:
+            secretProviderClass: auragxp-redis-devint2-keyvault
+
+    extraVolumeMounts:
+      - name: redis-secrets-store
+        mountPath: "/mnt/secrets-store"
+        readOnly: true
+
+  replica:
+    replicaCount: 1
+
+    persistence:
+      enabled: true
+      size: 8Gi
+      accessModes:
+        - ReadWriteOnce
+
+    service:
+      type: ClusterIP
+      ports:
+        redis: 6379
+
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 300m
+        memory: 256Mi
+
+    extraVolumes:
+      - name: redis-secrets-store
+        csi:
+          driver: secrets-store.csi.k8s.io
+          readOnly: true
+          volumeAttributes:
+            secretProviderClass: auragxp-redis-devint2-keyvault
+
+    extraVolumeMounts:
+      - name: redis-secrets-store
+        mountPath: "/mnt/secrets-store"
+        readOnly: true
+
+  metrics:
+    enabled: false
+
+  sentinel:
+    enabled: false
+
+  cluster:
+    enabled: false
+
+# ADDED: CSI Key Vault configuration
+csiKeyVault:
+  secretProviderClassName: "auragxp-redis-devint2-keyvault"
+  syncedK8sSecretName: "auragxp-redis-devint2-auth"
+  vaultName: "kv-agxp-dev-eus-sh"
+  tenantId: "788f6d9e-1a66-4385-9aee-01da8900e00b"
+  clientId: "e09e2815-5e84-47c7-b4e2-6070e08ae362"
+  namespace: auragxp-db-devint2
+  objects:
+    array:
+      - objectName: REDIS-PASSWORD
+        objectType: secret
+
+# ADDED: Namespace configuration
+namespace: auragxp-db-devint2

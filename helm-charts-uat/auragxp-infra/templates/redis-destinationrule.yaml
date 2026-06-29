@@ -1,0 +1,10 @@
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: {{ .Release.Name }}-redis-mtls-disabled
+  namespace: {{ .Values.namespace }}
+spec:
+  host: {{ .Values.redis.host }}
+  trafficPolicy:
+    tls:
+      mode: DISABLE

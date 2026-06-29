@@ -1,0 +1,108 @@
+AuraGXP PostgreSQL (CNPG) has been successfully deployed
+
+Release Name: {{ .Release.Name }}
+Namespace: {{ include "auragxp-cnpg-uat.namespace" . }}
+
+------------------------------------------------------------
+Service Account (Workload Identity)
+------------------------------------------------------------
+
+Verify:
+  kubectl get sa {{ include "auragxp-cnpg-uat.serviceAccountName" . }} \
+    -n {{ include "auragxp-cnpg-uat.namespace" . }}
+
+------------------------------------------------------------
+Azure Key Vault CSI Driver (Database Secrets)
+------------------------------------------------------------
+{{- if .Values.csiKeyVault.enabled }}
+
+SecretProviderClass:
+  {{ .Values.csiKeyVault.secretProviderClassName }}
+
+Synced Kubernetes Secret:
+  {{ .Values.csiKeyVault.syncedK8sSecretName }}
+
+Verify:
+  kubectl get secretproviderclass {{ .Values.csiKeyVault.secretProviderClassName }} \
+    -n {{ include "auragxp-cnpg-uat.namespace" . }}
+
+  kubectl get secret {{ .Values.csiKeyVault.syncedK8sSecretName }} \
+    -n {{ include "auragxp-cnpg-uat.namespace" . }}
+
+ℹ️   This secret contains PostgreSQL admin credentials
+    synced directly from Azure Key Vault.
+
+{{- else }}
+CSI Key Vault integration is disabled.
+{{- end }}
+
+------------------------------------------------------------
+CNPG PostgreSQL Cluster
+------------------------------------------------------------
+Cluster Name:
+  {{ include "auragxp-cnpg-uat.clusterName" . }}
+
+Instances:
+  {{ .Values.cluster.instances }}
+
+Storage:
+  {{ .Values.cluster.storageSize }}
+
+Verify:
+  kubectl get cluster {{ include "auragxp-cnpg-uat.clusterName" . }} \
+    -n {{ include "auragxp-cnpg-uat.namespace" . }}
+
+  kubectl get pods -l app.kubernetes.io/name={{ include "auragxp-cnpg-uat.name" . }} \
+    -n {{ include "auragxp-cnpg-uat.namespace" . }}
+
+------------------------------------------------------------
+Database Services
+------------------------------------------------------------
+{{- if .Values.services.enabled }}
+
+Read-Write Service (Admin):
+  {{ include "auragxp-cnpg-uat.clusterName" . }}-rw-external:{{ .Values.services.rw.nodePort }}
+
+Read-Only Service (App):
+  {{ include "auragxp-cnpg-uat.clusterName" . }}-ro-external:{{ .Values.services.ro.nodePort }}
+
+Verify:
+  kubectl get svc -l app.kubernetes.io/name={{ include "auragxp-cnpg-uat.name" . }} \
+    -n {{ include "auragxp-cnpg-uat.namespace" . }}
+
+{{- else }}
+Database services are disabled.
+{{- end }}
+
+------------------------------------------------------------
+Network Policies
+------------------------------------------------------------
+{{- if .Values.networkPolicy.enabled }}
+
+Default Deny Policy:
+  {{ .Values.networkPolicy.defaultDenyName }}
+
+DNS Allow Policy:
+  {{ .Values.networkPolicy.dnsName }}
+
+Verify:
+  kubectl get networkpolicy \
+    -n {{ include "auragxp-cnpg-uat.namespace" . }}
+
+{{- end }}
+
+------------------------------------------------------------
+Connection Strings
+------------------------------------------------------------
+Admin (Read-Write):
+  postgresql://{{ .Values.cluster.adminUser.name }}:${PASSWORD}@{{ include "auragxp-cnpg-uat.clusterName" . }}-rw:5432/{{ .Values.cluster.bootstrap.database | default "postgres" }}
+
+App (Read-Only):
+  postgresql://{{ .Values.cluster.appUser.name }}:${PASSWORD}@{{ include "auragxp-cnpg-uat.clusterName" . }}-ro:5432/{{ .Values.cluster.bootstrap.database | default "postgres" }}
+
+------------------------------------------------------------
+Installation Complete
+------------------------------------------------------------
+Use `kubectl describe` on the cluster or pods for deeper inspection.
+Happy querying!
+

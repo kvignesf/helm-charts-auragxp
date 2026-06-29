@@ -1,0 +1,232 @@
+{{- if .Values.networkPolicy.enabled }}
+
+# Default deny all ingress to Postgres pods
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Values.networkPolicy.defaultDenyName }}
+  namespace: {{ include "watershed-cnpg.namespace" . }}
+  labels:
+    {{- include "watershed-cnpg.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      cnpg.io/cluster: {{ include "watershed-cnpg.clusterName" . }}
+  policyTypes:
+    - Ingress
+
+---
+
+# Allow INTERNAL namespace communication
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-cnpg-internal
+  namespace: {{ include "watershed-cnpg.namespace" . }}
+  labels:
+    {{- include "watershed-cnpg.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      cnpg.io/cluster: {{ include "watershed-cnpg.clusterName" . }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              cnpg.io/cluster: {{ include "watershed-cnpg.clusterName" . }}
+      ports:
+        - protocol: TCP
+          port: 5432
+
+---
+
+# Allow INTERNAL Egress for replication
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-cnpg-internal-egress
+  namespace: {{ include "watershed-cnpg.namespace" . }}
+  labels:
+    {{- include "watershed-cnpg.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      cnpg.io/cluster: {{ include "watershed-cnpg.clusterName" . }}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              cnpg.io/cluster: {{ include "watershed-cnpg.clusterName" . }}
+      ports:
+        - protocol: TCP
+          port: 5432
+
+---
+
+# Allow Backend → Postgres
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-backend-to-postgres
+  namespace: {{ include "watershed-cnpg.namespace" . }}
+  labels:
+    {{- include "watershed-cnpg.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      cnpg.io/cluster: {{ include "watershed-cnpg.clusterName" . }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.backendNamespace }}
+          podSelector:
+            matchLabels:
+              {{- range $key, $value := .Values.networkPolicy.backendLabelSelector }}
+              {{ $key }}: {{ $value | quote }}
+              {{- end }}
+      ports:
+        - protocol: TCP
+          port: 5432
+
+---
+
+# Allow Keycloak → Postgres
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-keycloak-to-postgres
+  namespace: {{ include "watershed-cnpg.namespace" . }}
+  labels:
+    {{- include "watershed-cnpg.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      cnpg.io/cluster: {{ include "watershed-cnpg.clusterName" . }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.keycloakNamespace }}
+          podSelector:
+            matchLabels:
+              {{- range $key, $value := .Values.networkPolicy.keycloakLabelSelector }}
+              {{ $key }}: {{ $value | quote }}
+              {{- end }}
+      ports:
+        - protocol: TCP
+          port: 5432
+
+---
+
+# Allow CNPG Operator → Postgres
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-cnpg-operator
+  namespace: {{ include "watershed-cnpg.namespace" . }}
+  labels:
+    {{- include "watershed-cnpg.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      cnpg.io/cluster: {{ include "watershed-cnpg.clusterName" . }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.cnpgOperatorNamespace }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.networkPolicy.operatorPort }}
+
+---
+
+# Allow DNS egress
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Values.networkPolicy.dnsName }}
+  namespace: {{ include "watershed-cnpg.namespace" . }}
+  labels:
+    {{- include "watershed-cnpg.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      cnpg.io/cluster: {{ include "watershed-cnpg.clusterName" . }}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+
+---
+
+# Allow CNPG pods → Kubernetes API
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-kube-apiserver
+  namespace: {{ include "watershed-cnpg.namespace" . }}
+  labels:
+    {{- include "watershed-cnpg.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/managed-by: cloudnative-pg
+  policyTypes:
+    - Egress
+  egress:
+    - ports:
+        - protocol: TCP
+          port: {{ .Values.networkPolicy.kubeAPIPort }}
+
+---
+
+# Allow External LoadBalancer Access (IP Restricted)
+{{- if .Values.services.externalAccess }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-external-lb
+  namespace: {{ include "watershed-cnpg.namespace" . }}
+  labels:
+    {{- include "watershed-cnpg.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      cnpg.io/cluster: {{ include "watershed-cnpg.clusterName" . }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        {{- range .Values.services.allowedIPs }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: 5432
+{{- end }}
+
+{{- end }}

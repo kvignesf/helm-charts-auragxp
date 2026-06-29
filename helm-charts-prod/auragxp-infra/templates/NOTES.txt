@@ -1,0 +1,21 @@
+Auragxp Infrastructure Add-Ons has been deployed!
+
+Key Components Deployed:
+- Service Account: {{ .Values.serviceAccount.name | default (include "auragxp-infra.fullname" .) }}
+- CSI Secret Provider Classes (if enabled)
+- Network Policies (if enabled)
+- Istio Resources (DestinationRules, ServiceEntries, VirtualService, Gateway)
+- PeerAuthentication for mTLS
+
+Useful Commands:
+To Check the ServiceAccount:
+    kubectl get sa {{ .Values.serviceAccount.name | default (include "auragxp-infra.fullname" .) }} -n {{ .Values.namespace | default .Release.Namespace }}
+
+To Check CSI Secret Provider Classes:
+    kubectl get secretproviderclasses -n {{ .Values.namespace | default .Release.Namespace }}
+
+To Check Istio Configuration:
+    kubectl get virtualservice,gateway,destinationrule,serviceentry -n {{ .Values.namespace | default .Release.Namespace }}
+
+To Check Network Policies:
+    kubectl get networkpolicies -n {{ .Values.namespace | default .Release.Namespace }}

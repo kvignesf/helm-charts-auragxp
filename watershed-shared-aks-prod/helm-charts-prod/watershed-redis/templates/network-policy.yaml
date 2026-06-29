@@ -1,0 +1,45 @@
+{{- if .Values.redis.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/instance: watershed-redis
+    app.kubernetes.io/name: redis
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: redis-25.3.2
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: watershed-redis
+      app.kubernetes.io/name: redis
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - ports:
+        - port: 6379
+          protocol: TCP
+      from: []
+
+    - from:
+        - ipBlock:
+            cidr: 52.247.236.35/32
+        - ipBlock:
+            cidr: 51.143.93.49/32
+        - ipBlock:
+            cidr: 13.77.180.121/32
+        - ipBlock:
+            cidr: 51.143.1.17/32
+        - ipBlock:
+            cidr: 51.143.103.177/32
+        - ipBlock:
+            cidr: 52.175.202.25/32
+      ports:
+        - port: 6379
+          protocol: TCP
+
+  egress:
+    - {}
+{{- end }}

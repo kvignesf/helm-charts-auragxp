@@ -1,0 +1,190 @@
+trigger: none
+
+pool:
+  name: Azure-Self-Hosted2
+
+variables:
+  - group: 'watershed-platform-prod'
+  - name: environment
+    value: 'prod'  
+
+stages:
+  - stage: Bootstrap_Backend
+    displayName: 'Bootstrap Backend Admin'
+    jobs:
+      - job: Execute_Bootstrap
+        displayName: 'Run Bootstrap Admin Script'
+        pool:
+          name: 'Azure-Self-Hosted2'
+        steps:
+          - checkout: none
+
+          # Whitelist Agent IP
+          - task: AzureCLI@2
+            displayName: 'Whitelist Agent IP'
+            inputs:
+              azureSubscription: 'auragxp-azureprod'
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                set -e
+                AGENT_IP=$(curl -s https://api.ipify.org)
+                echo "Agent IP: $AGENT_IP"
+                EXISTING_RANGES=$(az aks show \
+                  --resource-group "$AKS_RG" \
+                  --name "$AKS_NAME" \
+                  --query "apiServerAccessProfile.authorizedIpRanges | join(',', @)" \
+                  -o tsv || echo "")
+                if [[ "$EXISTING_RANGES" != *"$AGENT_IP"* ]]; then
+                  NEW_RANGES="${EXISTING_RANGES:+${EXISTING_RANGES},}${AGENT_IP}"
+                  az aks update \
+                    --resource-group "$AKS_RG" \
+                    --name "$AKS_NAME" \
+                    --api-server-authorized-ip-ranges "$NEW_RANGES"
+                  echo "Waiting for firewall rules to propagate..."
+                  sleep 60
+                else
+                  echo "Agent IP already whitelisted"
+                fi
+            env:
+              AKS_RG: $(AKS_RG)
+              AKS_NAME: $(AKS_NAME)
+
+          # Connect to AKS and find backend pod
+          - task: AzureCLI@2
+            displayName: 'Find Backend Pod'
+            inputs:
+              azureSubscription: 'auragxp-azureprod'
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                set -e
+                
+                # Connect to AKS
+                az aks get-credentials \
+                  --resource-group "$AKS_RG" \
+                  --name "$AKS_NAME" \
+                  --overwrite-existing
+                
+                # Verify cluster connectivity
+                kubectl get nodes
+                
+                # Find backend pod
+                BACKEND_POD=$(kubectl get pods -n watershed-$(environment) \
+                  -l app=watershed-backend \
+                  -o jsonpath='{.items[0].metadata.name}')
+                
+                # Alternative label selection if above doesn't work
+                if [ -z "$BACKEND_POD" ]; then
+                  BACKEND_POD=$(kubectl get pods -n watershed-$(environment) \
+                    -l app=backend \
+                    -o jsonpath='{.items[0].metadata.name}')
+                fi
+                
+                # Fallback: get any pod with 'backend' in name
+                if [ -z "$BACKEND_POD" ]; then
+                  BACKEND_POD=$(kubectl get pods -n watershed-$(environment) \
+                    --field-selector=status.phase=Running \
+                    -o jsonpath='{.items[?contains(@.metadata.name, "backend")].metadata.name}' | awk '{print $1}')
+                fi
+                
+                if [ -z "$BACKEND_POD" ]; then
+                  echo "ERROR: No backend pod found in namespace watershed-$(environment)"
+                  kubectl get pods -n watershed-$(environment)
+                  exit 1
+                fi
+                
+                echo "Found backend pod: $BACKEND_POD"
+                echo "##vso[task.setvariable variable=BACKEND_POD]$BACKEND_POD"
+                
+            env:
+              AKS_RG: $(AKS_RG)
+              AKS_NAME: $(AKS_NAME)
+              environment: $(environment)
+
+          # Execute bootstrap script in backend pod using variables from variable group
+          - task: AzureCLI@2
+            displayName: 'Execute Bootstrap Admin Script'
+            inputs:
+              azureSubscription: 'auragxp-azureprod'
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                set -e
+                
+                echo "========================================="
+                echo "Bootstrapping Backend Admin"
+                echo "========================================="
+                
+                # Debug: Show which variables are available (values masked)
+                echo "Checking variables from watershed-platform-prod:"
+                echo "BOOTSTRAP_ADMIN_USERNAME is ${BOOTSTRAP_ADMIN_USERNAME:+SET}"
+                echo "BOOTSTRAP_ADMIN_EMAIL is ${BOOTSTRAP_ADMIN_EMAIL:+SET}"
+                echo "BOOTSTRAP_ADMIN_ORG_NAME is ${BOOTSTRAP_ADMIN_ORG_NAME:+SET}"
+                
+                # Validate required variables are set
+                if [ -z "$BOOTSTRAP_ADMIN_USERNAME" ]; then
+                  echo "ERROR: BOOTSTRAP_ADMIN_USERNAME not found in variable group watershed-platform-prod"
+                  exit 1
+                fi
+                
+                if [ -z "$BOOTSTRAP_ADMIN_EMAIL" ]; then
+                  echo "ERROR: BOOTSTRAP_ADMIN_EMAIL not found in variable group watershed-platform-prod"
+                  exit 1
+                fi
+                
+                if [ -z "$BOOTSTRAP_ADMIN_ORG_NAME" ]; then
+                  echo "ERROR: BOOTSTRAP_ADMIN_ORG_NAME not found in variable group watershed-platform-prod"
+                  exit 1
+                fi
+                
+                # Connect to AKS
+                az aks get-credentials \
+                  --resource-group "$AKS_RG" \
+                  --name "$AKS_NAME" \
+                  --overwrite-existing
+                
+                echo "Target Pod: $(BACKEND_POD)"
+                echo "Namespace: watershed-$(environment)"
+                echo ""
+                echo "Executing bootstrap script with:"
+                echo "  - Username: $BOOTSTRAP_ADMIN_USERNAME"
+                echo "  - Email: $BOOTSTRAP_ADMIN_EMAIL"
+                echo "  - Org: $BOOTSTRAP_ADMIN_ORG_NAME"
+                echo ""
+                
+                # Execute all commands in a single kubectl exec session
+                kubectl exec -it $(BACKEND_POD) \
+                  -n watershed-$(environment) \
+                  -c watershed-backend \
+                  -- sh -c "
+                    export BOOTSTRAP_ADMIN_USERNAME='$BOOTSTRAP_ADMIN_USERNAME' && \
+                    export BOOTSTRAP_ADMIN_EMAIL='$BOOTSTRAP_ADMIN_EMAIL' && \
+                    export BOOTSTRAP_ADMIN_ORG_NAME='$BOOTSTRAP_ADMIN_ORG_NAME' && \
+                    cd /app/apps/api && \
+                    node dist/bootstrap-admin.js
+                  "
+                
+                if [ $? -eq 0 ]; then
+                  echo ""
+                  echo "========================================="
+                  echo "✓ Bootstrap admin script executed successfully"
+                  echo "========================================="
+                  echo "Bootstrapped with values from watershed-platform-prod:"
+                  echo "  - Username: $BOOTSTRAP_ADMIN_USERNAME"
+                  echo "  - Email: $BOOTSTRAP_ADMIN_EMAIL"
+                  echo "  - Org: $BOOTSTRAP_ADMIN_ORG_NAME"
+                  echo "========================================="
+                else
+                  echo "ERROR: Bootstrap script execution failed"
+                  exit 1
+                fi
+                
+            env:
+              AKS_RG: $(AKS_RG)
+              AKS_NAME: $(AKS_NAME)
+              environment: $(environment)
+              BACKEND_POD: $(BACKEND_POD)
+              BOOTSTRAP_ADMIN_USERNAME: $(BOOTSTRAP_ADMIN_USERNAME)
+              BOOTSTRAP_ADMIN_EMAIL: $(BOOTSTRAP_ADMIN_EMAIL)
+              BOOTSTRAP_ADMIN_ORG_NAME: $(BOOTSTRAP_ADMIN_ORG_NAME)

@@ -1,0 +1,130 @@
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+
+metadata:
+  name: {{ include "auragxp-cnpg-devint2.clusterName" . }}
+  namespace: {{ include "auragxp-cnpg-devint2.namespace" . }}
+  labels:
+    {{- include "auragxp-cnpg-devint2.labels" . | nindent 4 }}
+
+spec:
+  imageName: {{ .Values.cluster.imageName }}
+
+  description: {{ if .Values.restore.enabled }}"Restored cluster with original configuration"{{ else }}{{ .Values.cluster.description | quote }}{{ end }}
+
+  instances: {{ if .Values.restore.enabled }}{{ .Values.restore.instances }}{{ else }}{{ .Values.cluster.instances }}{{ end }}
+
+  enableSuperuserAccess: {{ .Values.cluster.enableSuperuserAccess }}
+
+  # Bootstrap
+  bootstrap:
+    {{- if .Values.restore.enabled }}
+    recovery:
+      source: backup-source
+      {{- if .Values.restore.targetTime }}
+      recoveryTarget:
+        targetTime: "{{ .Values.restore.targetTime }}"
+        exclusive: false
+      {{- end }}
+    {{- else }}
+    initdb:
+      database: {{ .Values.cluster.bootstrap.database }}
+      owner: {{ .Values.cluster.bootstrap.owner }}
+      secret:
+        name: {{ .Values.csiKeyVault.syncedK8sSecretName }}
+    {{- end }}
+
+  # External source for restore
+  {{- if .Values.restore.enabled }}
+  externalClusters:
+    - name: backup-source
+      barmanObjectStore:
+        destinationPath: {{ .Values.restore.sourcePath }}
+        serverName: {{ .Values.cluster.name }}
+        azureCredentials:
+          storageAccount:
+            name: {{ .Values.restore.secretName }}
+            key: CNPG_STORAGE_ACCOUNT
+          storageKey:
+            name: {{ .Values.restore.secretName }}
+            key: CNPG_STORAGE_ACCOUNT_KEY
+  {{- end }}
+
+  # Backup configuration
+  backup:
+    barmanObjectStore:
+      destinationPath: {{ .Values.backup.dailyDestinationPath }}
+      azureCredentials:
+        storageAccount:
+          name: {{ .Values.csiKeyVault.syncedK8sSecretName }}
+          key: CNPG_STORAGE_ACCOUNT
+        storageKey:
+          name: {{ .Values.csiKeyVault.syncedK8sSecretName }}
+          key: CNPG_STORAGE_ACCOUNT_KEY
+      wal:
+        compression: {{ .Values.backup.wal.compression }}
+        maxParallel: {{ .Values.backup.wal.maxParallel }}
+      data:
+        compression: {{ .Values.backup.data.compression }}
+        immediateCheckpoint: {{ .Values.backup.data.immediateCheckpoint }}
+    retentionPolicy: {{ .Values.backup.retentionPolicy | quote }}
+
+  # Storage
+  storage:
+    size: {{ if .Values.restore.enabled }}{{ .Values.restore.storageSize }}{{ else }}{{ .Values.cluster.storageSize }}{{ end }}
+
+  # PostgreSQL Parameters
+  postgresql:
+    parameters:
+      max_connections: "{{ if .Values.restore.enabled }}{{ .Values.restore.postgresql.maxConnections }}{{ else }}{{ .Values.cluster.postgresql.maxConnections }}{{ end }}"
+      shared_buffers: "{{ if .Values.restore.enabled }}{{ .Values.restore.postgresql.sharedBuffers }}{{ else }}{{ .Values.cluster.postgresql.sharedBuffers }}{{ end }}"
+      work_mem: "{{ .Values.cluster.postgresql.workMem }}"
+      maintenance_work_mem: "{{ .Values.cluster.postgresql.maintenanceWorkMem }}"
+      effective_cache_size: "{{ .Values.cluster.postgresql.effectiveCacheSize }}"
+      checkpoint_timeout: "{{ .Values.cluster.postgresql.checkpointTimeout }}"
+      checkpoint_completion_target: "{{ .Values.cluster.postgresql.checkpointCompletionTarget }}"
+      wal_writer_delay: "{{ .Values.cluster.postgresql.walWriterDelay }}"
+
+  # Resources
+  resources:
+    requests:
+      cpu: {{ if .Values.restore.enabled }}{{ .Values.restore.resources.requests.cpu | quote }}{{ else }}{{ .Values.resources.requests.cpu | quote }}{{ end }}
+      memory: {{ if .Values.restore.enabled }}{{ .Values.restore.resources.requests.memory | quote }}{{ else }}{{ .Values.resources.requests.memory | quote }}{{ end }}
+    limits:
+      cpu: {{ if .Values.restore.enabled }}{{ .Values.restore.resources.limits.cpu | quote }}{{ else }}{{ .Values.resources.limits.cpu | quote }}{{ end }}
+      memory: {{ if .Values.restore.enabled }}{{ .Values.restore.resources.limits.memory | quote }}{{ else }}{{ .Values.resources.limits.memory | quote }}{{ end }}
+
+  # Scheduling
+  affinity:
+{{ toYaml .Values.affinity | indent 4 }}
+
+  tolerations:
+{{ toYaml .Values.tolerations | indent 4 }}
+
+  nodeSelector:
+{{ toYaml .Values.nodeSelector | indent 4 }}
+
+  # Monitoring
+  monitoring:
+    enablePodMonitor: {{ .Values.monitoring.podMonitor.enabled }}
+
+  # Pod Template
+  podTemplate:
+    metadata:
+      annotations:
+        sidecar.istio.io/inject: {{ .Values.istio.sidecarInjection | quote }}
+    spec:
+      serviceAccountName: {{ .Values.serviceAccount.name }}
+      volumes:
+        - name: secrets-store-inline
+          csi:
+            driver: {{ .Values.csi.driverName }}
+            readOnly: true
+            volumeAttributes:
+              secretProviderClass: {{ .Values.csiKeyVault.secretProviderClassName }}
+      containers:
+        - name: postgres
+          volumeMounts:
+            - name: secrets-store-inline
+              mountPath: {{ .Values.csi.mountPath }}
+              readOnly: true

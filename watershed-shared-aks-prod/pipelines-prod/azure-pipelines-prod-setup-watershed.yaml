@@ -1,0 +1,338 @@
+trigger: none
+
+parameters:
+  - name: environment
+    displayName: 'Environment'
+    type: string
+    default: 'prod'
+    values:
+      - prod
+      - uat
+      - dev
+  - name: action
+    displayName: 'Action'
+    type: string
+    default: 'install'
+    values:
+      - install
+      - upgrade
+
+resources:
+  repositories:
+    - repository: auragxp_devops
+      type: git
+      name: auragxp-devops/auragxp-devops
+      ref: main
+
+variables:
+  - name: CHART_PATH
+    value: '$(Build.SourcesDirectory)/watershed-shared-aks-prod/helm-charts-prod'
+  
+  # Load environment-specific variable group based on parameter
+  - ${{ if eq(parameters.environment, 'dev') }}:
+    - group: 'watershed-platform-dev'
+  - ${{ if eq(parameters.environment, 'uat') }}:
+    - group: 'watershed-platform-uat'
+  - ${{ if eq(parameters.environment, 'prod') }}:
+    - group: 'watershed-platform-prod'
+
+stages:
+  - stage: Deploy_Infrastructure_and_Database
+    displayName: 'Deploy Infrastructure & Database to AKS - ${{ parameters.environment }}'
+    jobs:
+      - job: Helm_Deployment
+        displayName: 'Helm Charts ${{ parameters.action }}'
+        pool:
+            name: 'Azure-Self-Hosted2'
+        steps:
+          # Checkout Infrastructure Repository
+          - checkout: auragxp_devops
+            path: s/auragxp-devops
+            persistCredentials: true
+            displayName: 'Checkout DevOps Repository'
+
+          # Whitelist Agent IP
+          - task: AzureCLI@2
+            displayName: 'Whitelist Agent IP for ${{ parameters.environment }}'
+            inputs:
+              azureSubscription: $(AZURE_SERVICE_CONNECTION)
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                set -e
+                
+                AGENT_IP=$(curl -s https://api.ipify.org)
+                echo "Agent IP: $AGENT_IP"
+                
+                EXISTING_RANGES=$(az aks show \
+                  --resource-group "$(AKS_RG)" \
+                  --name "$(AKS_NAME)" \
+                  --query "apiServerAccessProfile.authorizedIpRanges | join(',', @)" \
+                  -o tsv || echo "")
+                
+                if [[ "$EXISTING_RANGES" != *"$AGENT_IP"* ]]; then
+                  NEW_RANGES="${EXISTING_RANGES:+${EXISTING_RANGES},}${AGENT_IP}"
+                  az aks update \
+                    --resource-group "$(AKS_RG)" \
+                    --name "$(AKS_NAME)" \
+                    --api-server-authorized-ip-ranges "$NEW_RANGES"
+                  echo "Waiting for firewall rules to propagate..."
+                  sleep 60
+                else
+                  echo "Agent IP already whitelisted"
+                fi
+
+          # Connect to AKS
+          - task: AzureCLI@2
+            displayName: 'Connect to AKS (${{ parameters.environment }})'
+            inputs:
+              azureSubscription: $(AZURE_SERVICE_CONNECTION)
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                set -e
+                
+                az aks get-credentials \
+                  --resource-group "$(AKS_RG)" \
+                  --name "$(AKS_NAME)" \
+                  --overwrite-existing
+                
+                kubelogin convert-kubeconfig -l azurecli
+                
+                echo "Verifying cluster connectivity for ${{ parameters.environment }}..."
+                kubectl get nodes
+
+          # Setup Federated Credentials - CONDITION REMOVED
+          - task: AzureCLI@2
+            displayName: 'Setup Federated Credentials (${{ parameters.environment }})'
+            inputs:
+              azureSubscription: $(AZURE_SERVICE_CONNECTION)
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                set -e
+                
+                SERVICE_ACCOUNT_NAME="watershed-serviceaccount"
+                MAIN_NAMESPACE="watershed-${{ parameters.environment }}"
+                DB_NAMESPACE="watershed-db"
+                IDENTITY_NAME="$(MANAGED_IDENTITY_NAME)"
+                IDENTITY_RESOURCE_GROUP="$(MANAGED_IDENTITY_RESOURCE_GROUP)"
+                
+                echo "Setting up federated credentials for ${{ parameters.environment }}"
+                
+                OIDC_ISSUER_URL=$(az aks show \
+                  --resource-group "$(AKS_RG)" \
+                  --name "$(AKS_NAME)" \
+                  --query oidcIssuerProfile.issuerUrl \
+                  -o tsv)
+                
+                echo "OIDC Issuer: $OIDC_ISSUER_URL"
+                
+                for NS in "$MAIN_NAMESPACE" "$DB_NAMESPACE"; do
+                  SUFFIX=$([ "$NS" = "$DB_NAMESPACE" ] && echo "-db" || echo "")
+                  CRED_NAME="watershed-${{ parameters.environment }}${SUFFIX}"
+                  
+                  EXISTS=$(az identity federated-credential show \
+                    --name "$CRED_NAME" \
+                    --resource-group "$IDENTITY_RESOURCE_GROUP" \
+                    --identity-name "$IDENTITY_NAME" \
+                    --query name -o tsv 2>/dev/null || echo "")
+                  
+                  if [ -z "$EXISTS" ]; then
+                    az identity federated-credential create \
+                      --name "$CRED_NAME" \
+                      --identity-name "$IDENTITY_NAME" \
+                      --resource-group "$IDENTITY_RESOURCE_GROUP" \
+                      --issuer "$OIDC_ISSUER_URL" \
+                      --subject "system:serviceaccount:${NS}:${SERVICE_ACCOUNT_NAME}" \
+                      --audiences "api://AzureADTokenExchange"
+                    echo "Created federated credential for $NS"
+                  else
+                    echo "Federated credential already exists for $NS, skipping..."
+                  fi
+                done
+
+          # Create required namespaces
+          - task: AzureCLI@2
+            displayName: 'Create Namespaces (${{ parameters.environment }})'
+            inputs:
+              azureSubscription: $(AZURE_SERVICE_CONNECTION)
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                set -e
+                
+                az aks get-credentials \
+                  --resource-group "$(AKS_RG)" \
+                  --name "$(AKS_NAME)" \
+                  --overwrite-existing
+                kubelogin convert-kubeconfig -l azurecli
+                
+                echo "Creating Namespaces for ${{ parameters.environment }}"
+                kubectl create namespace watershed-${{ parameters.environment }} --dry-run=client -o yaml | kubectl apply -f -
+                kubectl create namespace watershed-db --dry-run=client -o yaml | kubectl apply -f -
+                echo "Namespaces created/verified"
+
+          # STEP 1: Infrastructure Helm Chart - Using values-{environment}.yaml
+          - task: AzureCLI@2
+            displayName: 'Step 1: ${{ upper(parameters.action) }} Infrastructure Chart (${{ parameters.environment }})'
+            inputs:
+              azureSubscription: $(AZURE_SERVICE_CONNECTION)
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                set -e
+                
+                az aks get-credentials \
+                  --resource-group "$(AKS_RG)" \
+                  --name "$(AKS_NAME)" \
+                  --overwrite-existing
+                kubelogin convert-kubeconfig -l azurecli
+                
+                INFRA_NAMESPACE="watershed-${{ parameters.environment }}"
+                VALUES_FILE="$(CHART_PATH)/watershed-infra/values-${{ parameters.environment }}.yaml"
+                
+                echo "========================================="
+                echo "STEP 1: ${{ upper(parameters.action) }}ING Infrastructure Components"
+                echo "Environment: ${{ parameters.environment }}"
+                echo "Action: ${{ parameters.action }}"
+                echo "Values file: $VALUES_FILE"
+                echo "========================================="
+                
+                # Check if values file exists
+                if [ ! -f "$VALUES_FILE" ]; then
+                  echo "ERROR: Values file not found: $VALUES_FILE"
+                  exit 1
+                fi
+                
+                helm ${{ parameters.action }} watershed-infra \
+                  $(CHART_PATH)/watershed-infra \
+                  --namespace $INFRA_NAMESPACE \
+                  --create-namespace \
+                  -f "$VALUES_FILE" \
+                  --wait --timeout 5m
+              
+                echo "Infrastructure components ${{ parameters.action }}ed successfully"
+
+          # STEP 2: CNPG Database Cluster - Using values-{environment}.yaml
+          - task: AzureCLI@2
+            displayName: 'Step 2: ${{ upper(parameters.action) }} CNPG Database Cluster (${{ parameters.environment }})'
+            inputs:
+              azureSubscription: $(AZURE_SERVICE_CONNECTION)
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                set -e
+                
+                az aks get-credentials \
+                  --resource-group "$(AKS_RG)" \
+                  --name "$(AKS_NAME)" \
+                  --overwrite-existing
+                kubelogin convert-kubeconfig -l azurecli
+                
+                VALUES_FILE="$(CHART_PATH)/watershed-cnpg/values-${{ parameters.environment }}.yaml"
+                
+                echo "========================================="
+                echo "STEP 2: ${{ upper(parameters.action) }}ING CNPG Database Cluster"
+                echo "Environment: ${{ parameters.environment }}"
+                echo "Values file: $VALUES_FILE"
+                echo "========================================="
+                
+                # Check if values file exists
+                if [ ! -f "$VALUES_FILE" ]; then
+                  echo "ERROR: Values file not found: $VALUES_FILE"
+                  exit 1
+                fi
+                
+                helm ${{ parameters.action }} watershed-cnpg \
+                  $(CHART_PATH)/watershed-cnpg \
+                  --namespace watershed-db \
+                  --create-namespace \
+                  -f "$VALUES_FILE" \
+                  --wait --timeout 5m
+                
+                # Check if cluster exists and wait for it
+                if kubectl get cluster watershed-db-cluster -n watershed-db &>/dev/null; then
+                  echo "Database cluster exists, checking status..."
+                  kubectl wait --for=condition=ready --timeout=600s \
+                    cluster/watershed-db-cluster -n watershed-db || true
+                else
+                  echo "Waiting for database cluster to be created..."
+                  sleep 30
+                  kubectl wait --for=condition=ready --timeout=600s \
+                    cluster/watershed-db-cluster -n watershed-db || true
+                fi
+                echo "Database cluster verified"
+
+          # Wait for CNPG pods to be ready
+          - task: AzureCLI@2
+            displayName: 'Wait for CNPG pods to be ready (${{ parameters.environment }})'
+            inputs:
+              azureSubscription: $(AZURE_SERVICE_CONNECTION)
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                set -e
+                
+                az aks get-credentials \
+                  --resource-group "$(AKS_RG)" \
+                  --name "$(AKS_NAME)" \
+                  --overwrite-existing
+                kubelogin convert-kubeconfig -l azurecli
+                
+                echo "Waiting for CNPG database pods to be ready for ${{ parameters.environment }}..."
+                kubectl wait --for=condition=ready --timeout=300s \
+                  pod -l cnpg.io/cluster=watershed-db-cluster \
+                  -n watershed-db || true
+                echo "CNPG database pods are ready"
+
+          # Final Verification
+          - task: AzureCLI@2
+            displayName: 'Final Verification - Infrastructure & Database (${{ parameters.environment }})'
+            condition: always()
+            inputs:
+              azureSubscription: $(AZURE_SERVICE_CONNECTION)
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                set -e
+                
+                az aks get-credentials \
+                  --resource-group "$(AKS_RG)" \
+                  --name "$(AKS_NAME)" \
+                  --overwrite-existing
+                kubelogin convert-kubeconfig -l azurecli
+                
+                echo "========================================="
+                echo "FINAL VERIFICATION - INFRASTRUCTURE & DATABASE"
+                echo "Environment: ${{ parameters.environment }}"
+                echo "Action: ${{ parameters.action }}"
+                echo "========================================="
+                
+                echo "Namespaces:"
+                kubectl get namespaces
+                echo ""
+                
+                echo "Helm Releases:"
+                helm list -A
+                echo ""
+                
+                echo "Database Clusters:"
+                kubectl get cluster -n watershed-db || echo "No clusters found yet"
+                echo ""
+                
+                echo "Database Pods:"
+                kubectl get pods -n watershed-db
+                echo ""
+                
+                echo "Infrastructure Pods:"
+                kubectl get pods -n watershed-${{ parameters.environment }}
+                echo ""
+                
+                echo "Certificate Status:"
+                kubectl get certificate -n watershed-${{ parameters.environment }} || echo "No certificates found yet"
+                echo ""
+                
+                echo "========================================="
+                echo "✓ DEPLOYMENT COMPLETE - ${{ parameters.environment }} (${{ parameters.action }})"
+                echo "========================================="

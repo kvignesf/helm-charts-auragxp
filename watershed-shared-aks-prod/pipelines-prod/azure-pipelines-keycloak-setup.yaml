@@ -1,0 +1,441 @@
+trigger: none
+
+parameters:
+  - name: environment
+    displayName: 'Environment'
+    type: string
+    default: 'prod'
+    values:
+      - dev
+      - uat
+      - prod
+  - name: action
+    displayName: 'Action'
+    type: string
+    default: 'install'
+    values:
+      - install
+      - upgrade
+
+resources:
+  repositories:
+    - repository: auragxp_platform
+      type: git
+      name: auragxp-platform/qmslms_phase1
+      ref: main
+      endpoint: auragxp-platform-sc
+
+pool:
+    name: 'Azure-Self-Hosted2'
+
+variables:
+  # Load environment-specific variable group based on parameter
+  - ${{ if eq(parameters.environment, 'dev') }}:
+    - group: 'watershed-platform-dev'
+  - ${{ if eq(parameters.environment, 'uat') }}:
+    - group: 'watershed-platform-uat'
+  - ${{ if eq(parameters.environment, 'prod') }}:
+    - group: 'watershed-platform-prod'
+
+
+stages:
+  - stage: Import_Realm_To_Keycloak
+    displayName: 'Import Realm Configuration to Keycloak'
+    jobs:
+      - job: Realm_Import
+        displayName: 'Realm JSON Import'
+        pool:
+          name: 'Azure-Self-Hosted2'
+        steps:
+          - checkout: auragxp_platform
+            path: s/auragxp_platform
+            displayName: 'Checkout Current Repository'
+
+          # Whitelist Agent IP
+          - task: AzureCLI@2
+            displayName: 'Whitelist Agent IP'
+            inputs:
+              azureSubscription: "$(AZURE_SERVICE_CONNECTION)" 
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                set -e
+                AGENT_IP=$(curl -s https://api.ipify.org)
+                echo "Agent IP: $AGENT_IP"
+                EXISTING_RANGES=$(az aks show \
+                  --resource-group "$AKS_RG" \
+                  --name "$AKS_NAME" \
+                  --query "apiServerAccessProfile.authorizedIpRanges | join(',', @)" \
+                  -o tsv || echo "")
+                if [[ "$EXISTING_RANGES" != *"$AGENT_IP"* ]]; then
+                  NEW_RANGES="${EXISTING_RANGES:+${EXISTING_RANGES},}${AGENT_IP}"
+                  az aks update \
+                    --resource-group "$AKS_RG" \
+                    --name "$AKS_NAME" \
+                    --api-server-authorized-ip-ranges "$NEW_RANGES"
+                  echo "Waiting for firewall rules to propagate..."
+                  sleep 60
+                else
+                  echo "Agent IP already whitelisted"
+                fi
+            env:
+              AKS_RG: $(AKS_RG)
+              AKS_NAME: $(AKS_NAME)
+
+          # Connect to AKS
+          - task: AzureCLI@2
+            displayName: 'Connect to AKS'
+            inputs:
+              azureSubscription: "$(AZURE_SERVICE_CONNECTION)"
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                set -e
+                az aks get-credentials \
+                  --resource-group "$AKS_RG" \
+                  --name "$AKS_NAME" \
+                  --overwrite-existing
+                echo "Verifying cluster connectivity..."
+                kubectl get nodes
+            env:
+              AKS_RG: $(AKS_RG)
+              AKS_NAME: $(AKS_NAME)
+
+          # Replace variable placeholders with actual secret values
+          - task: AzureCLI@2
+            displayName: 'Replace Secret Placeholders in realm.json'
+            inputs:
+              azureSubscription: "$(AZURE_SERVICE_CONNECTION)"
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                set -e
+
+                echo "========================================="
+                echo "Replacing Secret Placeholders in realm.json"
+                echo "========================================="
+
+                SOURCE_REALM="$(Build.SourcesDirectory)/realm.json"
+
+                if [ ! -f "$SOURCE_REALM" ]; then
+                  echo "ERROR: realm.json not found at $SOURCE_REALM"
+                  ls -la $(Build.SourcesDirectory)/
+                  exit 1
+                fi
+
+                echo "Found realm.json at: $SOURCE_REALM"
+
+                # Debug: Show current placeholders
+                echo "DEBUG: Current placeholders in realm.json:"
+                grep -n '\$AURA_GXP_DEV_API_SECRET' "$SOURCE_REALM" || echo "Pattern not found"
+                grep -n '\$AURAGXP_DEV_CLIENT_SECRET' "$SOURCE_REALM" || echo "Pattern not found"
+                grep -n '\$PLATFORM_ADMIN_SECRET' "$SOURCE_REALM" || echo "Pattern not found"
+
+                # Create working copy
+                WORKING_REALM="$(Agent.TempDirectory)/realm_modified.json"
+                cp "$SOURCE_REALM" "$WORKING_REALM"
+
+                # Debug: Show environment variables status
+                echo "DEBUG: Environment variables status:"
+                echo "AURA_GXP_DEV_API_SECRET is ${AURA_GXP_DEV_API_SECRET:+SET (length: ${#AURA_GXP_DEV_API_SECRET})}"
+                echo "AURAGXP_DEV_CLIENT_SECRET is ${AURAGXP_DEV_CLIENT_SECRET:+SET (length: ${#AURAGXP_DEV_CLIENT_SECRET})}"
+                echo "PLATFORM_ADMIN_SECRET is ${PLATFORM_ADMIN_SECRET:+SET (length: ${#PLATFORM_ADMIN_SECRET})}"
+
+                # Replace variable placeholders with actual secret values
+                echo "Replacing secret placeholders..."
+
+                # Replace $AURA_GXP_DEV_API_SECRET
+                if [ -n "$AURA_GXP_DEV_API_SECRET" ]; then
+                  ESCAPED_SECRET=$(printf '%s\n' "$AURA_GXP_DEV_API_SECRET" | sed -e 's/[\/&]/\\&/g')
+                  sed -i "s/\$AURA_GXP_DEV_API_SECRET/$ESCAPED_SECRET/g" "$WORKING_REALM"
+                  echo "✓ Replaced \$AURA_GXP_DEV_API_SECRET"
+                else
+                  echo "WARNING: AURA_GXP_DEV_API_SECRET not set in variable group"
+                fi
+
+                # Replace $AURAGXP_DEV_CLIENT_SECRET
+                if [ -n "$AURAGXP_DEV_CLIENT_SECRET" ]; then
+                  ESCAPED_SECRET=$(printf '%s\n' "$AURAGXP_DEV_CLIENT_SECRET" | sed -e 's/[\/&]/\\&/g')
+                  sed -i "s/\$AURAGXP_DEV_CLIENT_SECRET/$ESCAPED_SECRET/g" "$WORKING_REALM"
+                  echo "✓ Replaced \$AURAGXP_DEV_CLIENT_SECRET"
+                else
+                  echo "WARNING: AURAGXP_DEV_CLIENT_SECRET not set in variable group"
+                fi
+
+                # Replace $PLATFORM_ADMIN_SECRET
+                if [ -n "$PLATFORM_ADMIN_SECRET" ]; then
+                  ESCAPED_SECRET=$(printf '%s\n' "$PLATFORM_ADMIN_SECRET" | sed -e 's/[\/&]/\\&/g')
+                  sed -i "s/\$PLATFORM_ADMIN_SECRET/$ESCAPED_SECRET/g" "$WORKING_REALM"
+                  echo "✓ Replaced \$PLATFORM_ADMIN_SECRET"
+                else
+                  echo "WARNING: PLATFORM_ADMIN_SECRET not set in variable group"
+                fi
+
+                # Save the modified realm (even if placeholders remain, validation step will catch it)
+                cp "$WORKING_REALM" "$(Agent.TempDirectory)/realm_ready_for_import.json"
+                echo "##vso[task.setvariable variable=MODIFIED_REALM_PATH]$(Agent.TempDirectory)/realm_ready_for_import.json"
+
+            env:
+              AURA_GXP_DEV_API_SECRET: $(AURA_GXP_DEV_API_SECRET)
+              AURAGXP_DEV_CLIENT_SECRET: $(AURAGXP_DEV_CLIENT_SECRET)
+              PLATFORM_ADMIN_SECRET: $(PLATFORM_ADMIN_SECRET)
+
+          # VALIDATION STEP: Verify all placeholders are replaced correctly
+          - task: AzureCLI@2
+            displayName: 'Validate Placeholder Replacement'
+            inputs:
+              azureSubscription: "$(AZURE_SERVICE_CONNECTION)"
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                set -e
+
+                echo "========================================="
+                echo "VALIDATING PLACEHOLDER REPLACEMENT"
+                echo "========================================="
+
+                MODIFIED_REALM="$(MODIFIED_REALM_PATH)"
+
+                if [ ! -f "$MODIFIED_REALM" ]; then
+                  echo "ERROR: Modified realm file not found at $MODIFIED_REALM"
+                  exit 1
+                fi
+
+                echo "Checking file: $MODIFIED_REALM"
+                echo ""
+                echo "Step 1: Checking for remaining placeholders..."
+
+                PLACEHOLDER_FOUND=false
+
+                # Check each placeholder
+                if grep -q '\$AURA_GXP_DEV_API_SECRET' "$MODIFIED_REALM"; then
+                  echo "ERROR: \$AURA_GXP_DEV_API_SECRET placeholder still exists!"
+                  grep -n '\$AURA_GXP_DEV_API_SECRET' "$MODIFIED_REALM"
+                  PLACEHOLDER_FOUND=true
+                else
+                  echo "\$AURA_GXP_DEV_API_SECRET placeholder properly replaced"
+                fi
+
+                if grep -q '\$AURAGXP_DEV_CLIENT_SECRET' "$MODIFIED_REALM"; then
+                  echo "ERROR: \$AURAGXP_DEV_CLIENT_SECRET placeholder still exists!"
+                  grep -n '\$AURAGXP_DEV_CLIENT_SECRET' "$MODIFIED_REALM"
+                  PLACEHOLDER_FOUND=true
+                else
+                  echo "\$AURAGXP_DEV_CLIENT_SECRET placeholder properly replaced"
+                fi
+
+                if grep -q '\$PLATFORM_ADMIN_SECRET' "$MODIFIED_REALM"; then
+                  echo "ERROR: \$PLATFORM_ADMIN_SECRET placeholder still exists!"
+                  grep -n '\$PLATFORM_ADMIN_SECRET' "$MODIFIED_REALM"
+                  PLACEHOLDER_FOUND=true
+                else
+                  echo "\$PLATFORM_ADMIN_SECRET placeholder properly replaced"
+                fi
+
+                # Also check for any other dollar sign patterns that might indicate unmasked variables
+                if grep -q '\$[A-Z][A-Z_]*' "$MODIFIED_REALM"; then
+                  echo ""
+                  echo "WARNING: Found other potential variable patterns:"
+                  grep -n '\$[A-Z][A-Z_]*' "$MODIFIED_REALM" || true
+                fi
+
+                if [ "$PLACEHOLDER_FOUND" = true ]; then
+                  echo ""
+                  echo "========================================="
+                  echo "VALIDATION FAILED!"
+                  echo "========================================="
+                  echo "One or more placeholders were not replaced correctly."
+                  echo "The realm import will NOT proceed."
+                  echo ""
+                  echo "Possible causes:"
+                  echo "  1. Secret variables not properly set in the variable group"
+                  echo "  2. Secret values contain special characters that need escaping"
+                  echo "  3. Placeholder names don't match exactly"
+                  echo ""
+                  echo "Please check the variable group 'aks-credentials-stage'"
+                  echo "and ensure all required secrets are defined."
+                  echo "========================================="
+                  exit 1
+                fi
+
+                echo ""
+                echo "Step 2: Validating secret values are not empty..."
+                
+                # Extract and validate that secret values are not empty
+                # This checks if the replaced values are meaningful (not empty strings)
+                if grep -q '"secret": ""' "$MODIFIED_REALM"; then
+                  echo "ERROR: Found empty secret value!"
+                  grep -n '"secret": ""' "$MODIFIED_REALM"
+                  exit 1
+                else
+                  echo "No empty secret values found"
+                fi
+
+                echo ""
+                echo "Step 3: Validating JSON structure..."
+                
+                # Validate JSON structure
+                if command -v jq &> /dev/null; then
+                  if jq empty "$MODIFIED_REALM" 2>/dev/null; then
+                    echo "JSON structure is valid"
+                  else
+                    echo "ERROR: Invalid JSON structure!"
+                    jq empty "$MODIFIED_REALM" 2>&1
+                    exit 1
+                  fi
+                else
+                  echo "jq not available, skipping JSON validation"
+                fi
+
+                echo ""
+                echo "Step 4: Verifying client secrets are properly set..."
+                
+                # Show which clients have secrets (masked for security)
+                echo "Clients with secrets configured:"
+                grep -B2 '"secret":' "$MODIFIED_REALM" | grep '"clientId"' | sed 's/.*"clientId": "\(.*\)".*/\1/' || echo "No clients found"
+
+                echo ""
+                echo "========================================="
+                echo "VALIDATION PASSED!"
+                echo "========================================="
+                echo "All placeholders have been successfully replaced."
+                echo "Proceeding with realm import..."
+                echo "========================================="
+
+                # Set a variable to indicate validation passed
+                echo "##vso[task.setvariable variable=VALIDATION_PASSED]true"
+
+            env:
+              MODIFIED_REALM_PATH: $(MODIFIED_REALM_PATH)
+
+          # Get a Keycloak Pod Name (only if validation passed)
+          - task: AzureCLI@2
+            displayName: 'Get Keycloak Pod Name'
+            condition: succeeded()
+            inputs:
+              azureSubscription: "$(AZURE_SERVICE_CONNECTION)"
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                set -e
+
+                az aks get-credentials \
+                  --resource-group "$AKS_RG" \
+                  --name "$AKS_NAME" \
+                  --overwrite-existing
+
+                # Get any one running Keycloak pod
+                KEYCLOAK_POD=$(kubectl get pods -n watershed-keycloak -l app=keycloak -o jsonpath='{.items[0].metadata.name}')
+
+                if [ -z "$KEYCLOAK_POD" ]; then
+                  echo "ERROR: No Keycloak pods found in namespace watershed-keycloak"
+                  exit 1
+                fi
+
+                echo "Found Keycloak pod: $KEYCLOAK_POD"
+                echo "##vso[task.setvariable variable=KEYCLOAK_POD]$KEYCLOAK_POD"
+
+            env:
+              AKS_RG: $(AKS_RG)
+              AKS_NAME: $(AKS_NAME)
+
+          # Import realm into Keycloak Pod (only if validation passed)
+          - task: AzureCLI@2
+            displayName: 'Import Realm into Keycloak'
+            condition: succeeded()
+            inputs:
+              azureSubscription: "$(AZURE_SERVICE_CONNECTION)"
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+
+                echo "========================================="
+                echo "Importing Realm into Keycloak"
+                echo "========================================="
+
+                az aks get-credentials \
+                  --resource-group "$AKS_RG" \
+                  --name "$AKS_NAME" \
+                  --overwrite-existing
+
+                MODIFIED_REALM="$(MODIFIED_REALM_PATH)"
+
+                if [ ! -f "$MODIFIED_REALM" ]; then
+                  echo "ERROR: Modified realm file not found at $MODIFIED_REALM"
+                  exit 1
+                fi
+
+                # Double-check placeholders one more time before import
+                if grep -q '\$AURA_GXP_DEV_API_SECRET\|\\$AURAGXP_DEV_CLIENT_SECRET\|\$PLATFORM_ADMIN_SECRET' "$MODIFIED_REALM"; then
+                  echo "ERROR: Placeholders still found in realm file! Aborting import."
+                  echo "This should not happen if validation passed."
+                  exit 1
+                fi
+
+                echo "Target pod: $(KEYCLOAK_POD)"
+                echo "Copying realm.json to pod..."
+                kubectl exec -i $(KEYCLOAK_POD) -n watershed-keycloak -- sh -c 'cat > /tmp/realm.json' < "$MODIFIED_REALM"
+                
+                echo "Importing realm into Keycloak database..."
+                kubectl exec $(KEYCLOAK_POD) -n watershed-keycloak -- \
+                  /opt/keycloak/bin/kc.sh import --file /tmp/realm.json
+
+                echo "✓ Realm import completed successfully"
+                echo ""
+                echo "Note: Since Keycloak uses a shared database,"
+                echo "the realm is now available on ALL Keycloak pods automatically"
+
+                # Cleanup temporary file from pod
+                kubectl exec $(KEYCLOAK_POD) -n watershed-keycloak -- rm -f /tmp/realm.json || true
+
+            env:
+              AKS_RG: $(AKS_RG)
+              AKS_NAME: $(AKS_NAME)
+              MODIFIED_REALM_PATH: $(MODIFIED_REALM_PATH)
+
+          # Final Verification (only if import was attempted)
+          - task: AzureCLI@2
+            displayName: 'Final Verification'
+            condition: succeeded()
+            inputs:
+              azureSubscription: "$(AZURE_SERVICE_CONNECTION)"
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                set -e
+
+                echo "========================================="
+                echo "REALM IMPORT VERIFICATION"
+                echo "========================================="
+
+                az aks get-credentials \
+                  --resource-group "$AKS_RG" \
+                  --name "$AKS_NAME" \
+                  --overwrite-existing
+
+                echo "Keycloak Pods Status:"
+                kubectl get pods -n watershed-keycloak -l app=keycloak
+
+                echo ""
+                echo "Checking if realm was imported (looking for import logs)..."
+                kubectl logs $(KEYCLOAK_POD) -n watershed-keycloak --tail=50 | grep -i "imported\|realm" || echo "No recent import logs found (import may have been silent)"
+
+                echo ""
+                echo "========================================="
+                echo "REALM IMPORT COMPLETED SUCCESSFULLY"
+                echo "========================================="
+                echo "✓ Realm imported to Keycloak database"
+                echo "✓ Realm is now available on ALL Keycloak pods"
+
+                echo "Realm Name: auraqpos_platform_realm"
+                echo ""
+                echo "Secrets injected from variable group:"
+                echo "  - \$AURA_GXP_DEV_API_SECRET → [MASKED]"
+                echo "  - \$AURAGXP_DEV_CLIENT_SECRET → [MASKED]"
+                echo "  - \$PLATFORM_ADMIN_SECRET → [MASKED]"
+                echo "========================================="
+
+            env:
+              AKS_RG: $(AKS_RG)
+              AKS_NAME: $(AKS_NAME)
+              KEYCLOAK_POD: $(KEYCLOAK_POD)

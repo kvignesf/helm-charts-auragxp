@@ -1,0 +1,153 @@
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: {{ .Values.virtualService.name }}
+  namespace: {{ .Values.istio.ingressNamespace }}
+  labels:
+    app.kubernetes.io/managed-by: Helm
+  annotations:
+    meta.helm.sh/release-name: {{ .Release.Name }}
+    meta.helm.sh/release-namespace: {{ .Values.namespace }}
+
+spec:
+  gateways:
+    - {{ .Values.istio.ingressNamespace }}/{{ .Values.istio.gatewayName }}
+
+  hosts:
+    - {{ .Values.istio.hostname }}
+
+  http:
+    # ACME challenge
+    - match:
+        - uri:
+            prefix: /.well-known/acme-challenge/
+      route:
+        - destination:
+            host: {{ .Values.acme.solverPodName }}.{{ .Values.acme.solverNamespace }}.svc.cluster.local
+            port:
+              number: {{ .Values.acme.solverPort }}
+
+    # 1️⃣ API proxy calls → FRONTEND
+    - match:
+        - uri:
+            prefix: /api/proxy/
+      headers:
+        request:
+          set:
+            Authorization: "%REQ(Authorization)%"
+            Cookie: "%REQ(Cookie)%"
+            X-Forwarded-Host: {{ .Values.istio.hostname }}
+            X-Forwarded-Port: "443"
+            X-Forwarded-Proto: https
+      route:
+        - destination:
+            host: {{ .Values.services.frontend.name }}.{{ .Values.namespace }}.svc.cluster.local
+            port:
+              number: {{ .Values.services.frontend.port }}
+
+    # 2️⃣ Auth / org / session APIs → FRONTEND
+    - match:
+        - uri:
+            prefix: /api/auth/
+        - uri:
+            prefix: /api/org/select
+        - uri:
+            prefix: /api/keepalive
+        - uri:
+            prefix: /api/logout
+      headers:
+        request:
+          set:
+            Authorization: "%REQ(Authorization)%"
+            Cookie: "%REQ(Cookie)%"
+            X-Forwarded-Host: {{ .Values.istio.hostname }}
+            X-Forwarded-Port: "443"
+            X-Forwarded-Proto: https
+      route:
+        - destination:
+            host: {{ .Values.services.frontend.name }}.{{ .Values.namespace }}.svc.cluster.local
+            port:
+              number: {{ .Values.services.frontend.port }}
+
+    # 3️⃣ Backend APIs → BACKEND
+    - match:
+        - uri:
+            prefix: /api/
+      timeout: {{ .Values.virtualService.timeout }}
+      headers:
+        request:
+          set:
+            X-Forwarded-Host: {{ .Values.istio.hostname }}
+            X-Forwarded-Port: "443"
+            X-Forwarded-Proto: https
+      route:
+        - destination:
+            host: {{ .Values.services.backend.name }}.{{ .Values.namespace }}.svc.cluster.local
+            port:
+              number: {{ .Values.services.backend.port }}
+
+    # 4️⃣ Keycloak → KEYCLOAK SERVICE
+    - match:
+        - uri:
+            prefix: /keycloak
+      route:
+        - destination:
+            host: {{ .Values.services.keycloak.serviceName }}.{{ .Values.services.keycloak.namespace }}.svc.cluster.local
+            port:
+              number: {{ .Values.services.keycloak.port }}
+      timeout: {{ .Values.virtualService.timeout }}
+
+    # 5️⃣ Static assets (Next.js)
+    - match:
+        - uri:
+            prefix: /_next/
+        - uri:
+            prefix: /static/
+      route:
+        - destination:
+            host: {{ .Values.services.frontend.name }}.{{ .Values.namespace }}.svc.cluster.local
+            port:
+              number: {{ .Values.services.frontend.port }}
+
+    # 6️⃣ SCORM assets (external)
+    - match:
+        - uri:
+            prefix: /scorm/
+      rewrite:
+        uri: /
+      headers:
+        request:
+          set:
+            Host: {{ .Values.externalServices.scorm.host }}
+            X-Forwarded-Proto: https
+      route:
+        - destination:
+            host: {{ .Values.externalServices.scorm.host }}
+            port:
+              number: {{ .Values.externalServices.scorm.port }}
+
+    # 7️⃣ Support (VitePress static site)
+    - match:
+        - uri:
+            exact: /support
+        - uri:
+            prefix: /support/
+      timeout: {{ .Values.virtualService.timeout }}
+      rewrite:
+        uri: /
+      route:
+        - destination:
+            host: {{ .Values.services.support.name }}.{{ .Values.namespace }}.svc.cluster.local
+            port:
+              number: {{ .Values.services.support.port }}
+
+    # 8️⃣ Catch-all → FRONTEND (MUST BE LAST)
+    - match:
+        - uri:
+            prefix: /
+      timeout: {{ .Values.virtualService.timeout }}
+      route:
+        - destination:
+            host: {{ .Values.services.frontend.name }}.{{ .Values.namespace }}.svc.cluster.local
+            port:
+              number: {{ .Values.services.frontend.port }}

@@ -1,0 +1,50 @@
+# Default values for keycloak-operator
+namespace: auragxp-keycloak-devint2
+
+replicaCount: 1
+
+azure:
+  clientId: "e09e2815-5e84-47c7-b4e2-6070e08ae362"
+
+image:
+  repository: quay.io/keycloak/keycloak-operator
+  tag: 26.4.7
+  pullPolicy: IfNotPresent
+
+serviceAccount:
+  name: auragxp-serviceaccount-devint2
+  create: true
+
+# RBAC configuration
+rbac:
+  create: true
+  clusterRoleName: keycloak-operator
+  clusterRoleBindingName: keycloak-operator
+
+# Watch namespace configuration
+watchNamespace: auragxp-keycloak-devint2
+operatorName: keycloak-operator
+
+# Resource limits and requests
+resources:
+  requests:
+    cpu: 50m
+    memory: 384Mi
+  limits:
+    cpu: 200m
+    memory: 512Mi
+
+# Additional environment variables
+extraEnv: []
+
+# Pod annotations
+podAnnotations: {}
+
+# Node selector
+nodeSelector: {}
+
+# Tolerations
+tolerations: []
+
+# Affinity
+affinity: {}

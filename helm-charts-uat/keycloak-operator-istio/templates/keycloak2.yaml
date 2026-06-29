@@ -1,0 +1,214 @@
+apiVersion: k8s.keycloak.org/v2alpha1
+kind: Keycloak
+metadata:
+  name: {{ .Release.Name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: keycloak
+    version: {{ .Values.keycloak.image | splitList ":" | last }}
+
+spec:
+  instances: {{ .Values.keycloak.replicas | default 2 }}
+  startOptimized: {{ .Values.keycloak.startOptimized }}
+
+  image: {{ .Values.keycloak.image }}
+
+  hostname:
+    hostname: {{ .Values.keycloak.hostname }}
+    strict: false
+    strictBackchannel: false
+
+  ingress:
+    enabled: false
+
+  http:
+    httpEnabled: {{ .Values.keycloak.http.enabled }}
+    httpPort: {{ .Values.keycloak.http.port }}
+    httpsPort: {{ .Values.keycloak.http.httpsPort }}
+
+  db:
+    vendor: {{ .Values.keycloak.db.vendor }}
+    host: {{ .Values.keycloak.db.host }}
+    port: {{ .Values.keycloak.db.port }}
+    database: {{ .Values.keycloak.db.database }}
+    usernameSecret:
+      name: {{ .Values.csi.secretName }}
+      key: {{ .Values.csi.keyMappings.dbUsername }}
+    passwordSecret:
+      name: {{ .Values.csi.secretName }}
+      key: {{ .Values.csi.keyMappings.dbPassword }}
+    pool:
+      initialSize: {{ .Values.keycloak.db.pool.initialSize }}
+      minSize: {{ .Values.keycloak.db.pool.minSize }}
+      maxSize: {{ .Values.keycloak.db.pool.maxSize }}
+      acquireTimeout: {{ .Values.keycloak.db.pool.acquireTimeout }}
+
+  features:
+    enabled:
+      {{- range .Values.keycloak.features.enabled }}
+      - {{ . }}
+      {{- end }}
+    disabled:
+      {{- range .Values.keycloak.features.disabled }}
+      - {{ . }}
+      {{- end }}
+
+  unsupported:
+    podTemplate:
+      metadata:
+        annotations:
+          {{- toYaml .Values.podAnnotations | nindent 10 }}
+      spec:
+        serviceAccountName: {{ .Values.serviceAccount.name }}
+
+        {{- if .Values.podAntiAffinity.enabled }}
+        affinity:
+          {{- if .Values.podAntiAffinity.requiredDuringScheduling }}
+          podAntiAffinity:
+            requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - keycloak
+              topologyKey: kubernetes.io/hostname
+          {{- end }}
+          {{- if .Values.podAntiAffinity.preferredDuringScheduling }}
+          podAffinity:
+            preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: {{ .Values.podAntiAffinity.weight }}
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                  - key: app
+                    operator: In
+                    values:
+                    - keycloak
+                topologyKey: topology.kubernetes.io/zone
+          {{- end }}
+        {{- end }}
+
+        {{- if .Values.topologySpreadConstraints.enabled }}
+        topologySpreadConstraints:
+        - maxSkew: {{ .Values.topologySpreadConstraints.maxSkew }}
+          topologyKey: {{ .Values.topologySpreadConstraints.topologyKey }}
+          whenUnsatisfiable: {{ .Values.topologySpreadConstraints.whenUnsatisfiable }}
+          labelSelector:
+            matchLabels:
+              app: keycloak
+        {{- end }}
+
+        containers:
+        - name: keycloak
+          resources:
+            requests:
+              cpu: {{ .Values.keycloak.resources.requests.cpu }}
+              memory: {{ .Values.keycloak.resources.requests.memory }}
+              ephemeral-storage: {{ .Values.keycloak.resources.requests.ephemeralStorage }}
+            limits:
+              cpu: {{ .Values.keycloak.resources.limits.cpu }}
+              memory: {{ .Values.keycloak.resources.limits.memory }}
+              ephemeral-storage: {{ .Values.keycloak.resources.limits.ephemeralStorage }}
+
+          env:
+          # Proxy Settings
+          - name: KC_PROXY
+            value: {{ .Values.keycloak.proxy.mode }}
+          - name: KC_PROXY_HEADERS
+            value: {{ .Values.keycloak.proxy.headers }}
+          - name: KC_HOSTNAME
+            value: {{ .Values.keycloak.hostname }}
+          - name: KC_HOSTNAME_STRICT
+            value: "false"
+          - name: KC_HOSTNAME_STRICT_HTTPS
+            value: "false"
+
+          # Cache Settings
+          - name: KC_CACHE
+            value: {{ .Values.keycloak.cache.type }}
+
+          # Path Settings
+          - name: KC_HTTP_RELATIVE_PATH
+            value: {{ .Values.keycloak.relativePath }}
+
+          # Admin bootstrap
+          - name: KC_BOOTSTRAP_ADMIN_USERNAME
+            valueFrom:
+              secretKeyRef:
+                name: {{ .Values.csi.secretName }}
+                key: {{ .Values.csi.keyMappings.adminUsername }}
+          - name: KC_BOOTSTRAP_ADMIN_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: {{ .Values.csi.secretName }}
+                key: {{ .Values.csi.keyMappings.adminPassword }}
+
+          # Health and Metrics
+          - name: KC_HEALTH_ENABLED
+            value: "true"
+          - name: KC_METRICS_ENABLED
+            value: "true"
+
+          # JVM Settings
+          - name: JAVA_OPTS_APPEND
+            value: "-XX:MetaspaceSize={{ .Values.keycloak.jvm.metaspaceSize }} -XX:MaxMetaspaceSize={{ .Values.keycloak.jvm.maxMetaspaceSize }} -Djava.awt.headless=true"
+
+          startupProbe:
+            httpGet:
+              path: {{ .Values.probes.startup.path }}
+              port: {{ .Values.probes.startup.port }}
+              scheme: {{ .Values.probes.startup.scheme }}
+            initialDelaySeconds: {{ .Values.probes.startup.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.startup.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.startup.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.startup.failureThreshold }}
+
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.probes.readiness.path }}
+              port: {{ .Values.probes.readiness.port }}
+              scheme: {{ .Values.probes.readiness.scheme }}
+            initialDelaySeconds: {{ .Values.probes.readiness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.readiness.timeoutSeconds }}
+            successThreshold: {{ .Values.probes.readiness.successThreshold }}
+            failureThreshold: {{ .Values.probes.readiness.failureThreshold }}
+
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.probes.liveness.path }}
+              port: {{ .Values.probes.liveness.port }}
+              scheme: {{ .Values.probes.liveness.scheme }}
+            initialDelaySeconds: {{ .Values.probes.liveness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.liveness.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.liveness.failureThreshold }}
+
+          volumeMounts:
+          - name: secrets-store
+            mountPath: /mnt/secrets
+            readOnly: true
+          - name: tmp
+            mountPath: /tmp
+          - name: data
+            mountPath: /opt/keycloak/data
+
+        volumes:
+        - name: secrets-store
+          csi:
+            driver: secrets-store.csi.k8s.io
+            readOnly: true
+            volumeAttributes:
+              secretProviderClass: {{ .Values.csi.secretProviderClassName | replace "{{ .Release.Name }}" .Release.Name }}
+        - name: tmp
+          emptyDir: {}
+        - name: data
+          emptyDir: {}
+
+        securityContext:
+          fsGroup: {{ .Values.securityContext.fsGroup }}
+          runAsUser: {{ .Values.securityContext.runAsUser }}
+          runAsNonRoot: {{ .Values.securityContext.runAsNonRoot }}
+
+        terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}

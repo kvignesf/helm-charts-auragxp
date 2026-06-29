@@ -1,0 +1,14 @@
+watershed CNPG deployed successfully
+
+Cluster: {{ include "watershed-cnpg.clusterName" . }}
+Namespace: {{ include "watershed-cnpg.namespace" . }}
+
+Check health:
+  kubectl get cluster -n {{ include "watershed-cnpg.namespace" . }}
+  kubectl get pods -n {{ include "watershed-cnpg.namespace" . }}
+
+Primary endpoint:
+  {{ include "watershed-cnpg.clusterName" . }}-rw-external:5432
+
+Next:
+  Execute initial SQL setup after pods are healthy.

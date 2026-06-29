@@ -1,0 +1,36 @@
+namespace: watershed-db
+clusterName: watershed-db-cluster
+
+backup:
+  dailyDestinationPath: "https://stauragxpbackendprdesu.blob.core.windows.net/cnpg-daily-watershed"
+  weeklyDestinationPath: "https://stauragxpbackendprdesu.blob.core.windows.net/cnpg-weekly"
+  monthlyDestinationPath: "https://stauragxpbackendprdesu.blob.core.windows.net/cnpg-monthly"
+  secretName: watershed-cnpg-admin-secret
+  storageAccount: stauragxpbackendprdesu
+  retentionPolicy: "30d"
+
+dailyBackup:
+  enabled: true
+  name: watershed-daily-backup
+  schedule: "0 0 2 * * *"
+
+weeklyBackup:
+  enabled: true
+  name: watershed-weekly-backup
+  schedule: "0 0 1 * * 0"
+  immediate: true
+
+monthlyBackup:
+  enabled: true
+  name: watershed-monthly-backup
+  schedule: "0 0 1 1 * *"
+  immediate: false
+
+monitoring:
+  enabled: true
+  alertFor: "5m"
+  severity: "warning"
+
+networkPolicy:
+  enabled: true
+  allowAzureEgress: true

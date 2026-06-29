@@ -1,0 +1,666 @@
+trigger: none
+
+parameters:
+  - name: environment
+    displayName: 'Environment'
+    type: string
+    default: 'prod'
+    values:
+      - prod
+      - uat
+      - dev
+  - name: action
+    displayName: 'Action'
+    type: string
+    default: 'install'
+    values:
+      - install
+      - upgrade
+
+variables:
+  - name: CHART_PATH
+    value: '$(Build.SourcesDirectory)/watershed-shared-aks-prod/helm-charts-prod'
+  
+  # Load environment-specific variable group based on parameter
+  - ${{ if eq(parameters.environment, 'dev') }}:
+    - group: 'watershed-platform-dev'
+  - ${{ if eq(parameters.environment, 'uat') }}:
+    - group: 'watershed-platform-uat'
+  - ${{ if eq(parameters.environment, 'prod') }}:
+    - group: 'watershed-platform-prod'
+
+resources:
+  repositories:
+    - repository: auragxp_devops
+      type: git
+      name: auragxp-devops/auragxp-devops
+      ref: main
+      endpoint: auragxp-platform-sc
+
+stages:
+  - stage: Deploy_Helm_Charts
+    displayName: 'Deploy Helm Charts to AKS - ${{ parameters.environment }}'
+    jobs:
+      - job: Helm_Deployment
+        displayName: 'Helm Charts ${{ parameters.action }}'
+        pool:
+          name: 'Azure-Self-Hosted2'
+        steps:
+          # Checkout Infrastructure Repository
+          - checkout: auragxp_devops
+            path: s/auragxp-devops
+            persistCredentials: true
+            displayName: 'Checkout DevOps Repository'
+
+          # Whitelist Agent IP FIRST before attempting any AKS connection
+          - task: AzureCLI@2
+            displayName: 'Whitelist Agent IP - ${{ parameters.environment }}'
+            inputs:
+              azureSubscription: $(AZURE_SERVICE_CONNECTION)
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                set -e
+
+                AGENT_IP=$(curl -s https://api.ipify.org)
+                echo "Agent IP: $AGENT_IP"
+
+                EXISTING_RANGES=$(az aks show \
+                  --resource-group "$(AKS_RG)" \
+                  --name "$(AKS_NAME)" \
+                  --query "apiServerAccessProfile.authorizedIpRanges | join(',', @)" \
+                  -o tsv || echo "")
+
+                if [[ "$EXISTING_RANGES" != *"$AGENT_IP"* ]]; then
+                  NEW_RANGES="${EXISTING_RANGES:+${EXISTING_RANGES},}${AGENT_IP}"
+                  az aks update \
+                    --resource-group "$(AKS_RG)" \
+                    --name "$(AKS_NAME)" \
+                    --api-server-authorized-ip-ranges "$NEW_RANGES"
+                  echo "Waiting for firewall rules to propagate..."
+                  sleep 60
+                else
+                  echo "Agent IP already whitelisted"
+                fi
+
+          # Connect to AKS - only after IP is whitelisted
+          - task: AzureCLI@2
+            displayName: 'Connect to AKS - ${{ parameters.environment }}'
+            inputs:
+              azureSubscription: $(AZURE_SERVICE_CONNECTION)
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                set -e
+
+                az aks get-credentials \
+                  --resource-group "$(AKS_RG)" \
+                  --name "$(AKS_NAME)" \
+                  --overwrite-existing
+
+                echo "Verifying cluster connectivity for ${{ parameters.environment }}..."
+                kubectl get nodes
+            env:
+              AKS_RG: $(AKS_RG)
+              AKS_NAME: $(AKS_NAME)
+
+          # Create Required Namespaces
+          - task: AzureCLI@2
+            displayName: 'Create Required Namespaces - ${{ parameters.environment }}'
+            inputs:
+              azureSubscription: $(AZURE_SERVICE_CONNECTION)
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                set -e
+
+                echo "========================================="
+                echo "Creating Required Namespaces for ${{ parameters.environment }}"
+                echo "========================================="
+
+                # Ensure we're connected to the cluster
+                az aks get-credentials \
+                  --resource-group "$(AKS_RG)" \
+                  --name "$(AKS_NAME)" \
+                  --overwrite-existing
+
+                # Create Keycloak namespace
+                kubectl create namespace watershed-keycloak --dry-run=client -o yaml | kubectl apply -f -
+
+                # Create Redis namespace
+                kubectl create namespace watershed-db --dry-run=client -o yaml | kubectl apply -f -
+
+                echo "Namespaces created successfully"
+                kubectl get namespaces | grep -E "watershed-keycloak|watershed-db"
+            env:
+              AKS_RG: $(AKS_RG)
+              AKS_NAME: $(AKS_NAME)
+
+          # Setup Federated Credentials - Recreate every run + wait propagation
+          - task: AzureCLI@2
+            displayName: 'Setup Federated Credentials - ${{ parameters.environment }}'
+            inputs:
+              azureSubscription: $(AZURE_SERVICE_CONNECTION)
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                set -e
+
+                echo "========================================="
+                echo "Setting up Federated Credentials for ${{ parameters.environment }}"
+                echo "========================================="
+
+                # Ensure kubectl is connected 
+                az aks get-credentials \
+                  --resource-group "$(AKS_RG)" \
+                  --name "$(AKS_NAME)" \
+                  --overwrite-existing
+
+                # Get managed identity details
+                IDENTITY_NAME="$(MANAGED_IDENTITY_NAME)"
+                IDENTITY_RG="$(MANAGED_IDENTITY_RESOURCE_GROUP)"
+                AKS_RG="$(AKS_RG)"
+                AKS_NAME="$(AKS_NAME)"
+                IDENTITY_CLIENT_ID="$(MANAGED_IDENTITY_CLIENT_ID)"
+
+                # Get OIDC Issuer URL
+                OIDC_ISSUER_URL=$(az aks show \
+                  --resource-group "$AKS_RG" \
+                  --name "$AKS_NAME" \
+                  --query oidcIssuerProfile.issuerUrl \
+                  -o tsv)
+
+                if [ -z "$OIDC_ISSUER_URL" ]; then
+                  echo "ERROR: OIDC issuer URL not found"
+                  exit 1
+                fi
+
+                echo "OIDC Issuer URL: $OIDC_ISSUER_URL"
+                echo "Managed Identity: $IDENTITY_NAME"
+                echo "Client ID: $IDENTITY_CLIENT_ID"
+
+                # Define service accounts and their federated credentials
+                declare -A SERVICE_ACCOUNTS=(
+                  ["watershed-keycloak:keycloak-pod-sa"]="keycloak-pod-${{ parameters.environment }}"
+                  ["watershed-db:watershed-redis-master"]="redis-master-${{ parameters.environment }}"
+                  ["watershed-db:watershed-redis-replica"]="redis-replica-${{ parameters.environment }}"
+                )
+
+                # RECREATE federated credentials (delete if exists, then create fresh)
+                for SA in "${!SERVICE_ACCOUNTS[@]}"; do
+                  NAMESPACE="${SA%%:*}"
+                  SA_NAME="${SA##*:}"
+                  FED_NAME="${SERVICE_ACCOUNTS[$SA]}"
+
+                  echo ""
+                  echo "Processing federated credential: $FED_NAME"
+                  echo "  Namespace: $NAMESPACE"
+                  echo "  Service Account: $SA_NAME"
+
+                  # Delete if exists (ignore errors if doesn't exist)
+                  echo "Recreating federated credential: $FED_NAME"
+                  az identity federated-credential delete \
+                    --name "$FED_NAME" \
+                    --identity-name "$IDENTITY_NAME" \
+                    --resource-group "$IDENTITY_RG" \
+                    --yes 2>/dev/null || true
+
+                  # Create fresh credential
+                  az identity federated-credential create \
+                    --name "$FED_NAME" \
+                    --identity-name "$IDENTITY_NAME" \
+                    --resource-group "$IDENTITY_RG" \
+                    --issuer "$OIDC_ISSUER_URL" \
+                    --subject "system:serviceaccount:${NAMESPACE}:${SA_NAME}" \
+                    --audiences "api://AzureADTokenExchange" \
+                    --only-show-errors
+
+                  echo "Federated credential recreated: $FED_NAME"
+                done
+
+                # CRITICAL: Wait for Azure Entra propagation (30-90 seconds needed)
+                echo ""
+                echo "Waiting for federated credentials propagation to Azure Entra..."
+                sleep 60
+
+                # Verify federated credentials
+                echo ""
+                echo "========================================="
+                echo "Federated Credentials Summary for ${{ parameters.environment }}"
+                echo "========================================="
+                az identity federated-credential list \
+                  --identity-name "$IDENTITY_NAME" \
+                  --resource-group "$IDENTITY_RG" \
+                  --query "[].{Name:name, Subject:subject}" \
+                  -o table
+
+                echo ""
+                echo "Federated credentials setup completed successfully for ${{ parameters.environment }}"
+            env:
+              AKS_RG: $(AKS_RG)
+              AKS_NAME: $(AKS_NAME)
+              MANAGED_IDENTITY_NAME: $(MANAGED_IDENTITY_NAME)
+              MANAGED_IDENTITY_RESOURCE_GROUP: $(MANAGED_IDENTITY_RESOURCE_GROUP)
+              MANAGED_IDENTITY_CLIENT_ID: $(MANAGED_IDENTITY_CLIENT_ID)
+              ENVIRONMENT: ${{ parameters.environment }}
+
+          # Install Keycloak Operator (Conditional)
+          - task: AzureCLI@2
+            displayName: 'Install Keycloak Operator - ${{ parameters.environment }}'
+            inputs:
+              azureSubscription: $(AZURE_SERVICE_CONNECTION)
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                set -e
+
+                echo "========================================="
+                echo "Checking Keycloak Operator for ${{ parameters.environment }}"
+                echo "========================================="
+
+                # Ensure kubectl and helm are connected
+                az aks get-credentials \
+                  --resource-group "$(AKS_RG)" \
+                  --name "$(AKS_NAME)" \
+                  --overwrite-existing
+
+                NAMESPACE="watershed-keycloak"
+                VALUES_FILE="$(CHART_PATH)/keycloak-operator/values-${{ parameters.environment }}.yaml"
+
+                # Check if Keycloak Operator is already installed
+                if helm list -n $NAMESPACE | grep -q "keycloak-operator"; then
+                  echo "✓ Keycloak Operator already installed. Skipping..."
+                  CURRENT_STATUS=$(helm list -n $NAMESPACE | grep keycloak-operator | awk '{print $8}')
+                  echo "  Current status: $CURRENT_STATUS"
+                else
+                  echo "Installing Keycloak Operator from local chart..."
+                  helm upgrade --install keycloak-operator \
+                    $(CHART_PATH)/keycloak-operator \
+                    --namespace $NAMESPACE \
+                    --set namespace=$NAMESPACE \
+                    --set watchNamespace=$NAMESPACE \
+                    --values "$VALUES_FILE" \
+                    --wait \
+                    --timeout 4m \
+                    --atomic
+                  echo "✓ Keycloak Operator installed"
+                fi
+                
+                # Verify operator pods
+                echo ""
+                echo "Keycloak Operator Pods:"
+                kubectl get pods -n $NAMESPACE | grep keycloak-operator || echo "No operator pods found"
+            env:
+              AKS_RG: $(AKS_RG)
+              AKS_NAME: $(AKS_NAME)
+              CHART_PATH: $(CHART_PATH)
+
+          # Verify Keycloak Operator
+          - task: AzureCLI@2
+            displayName: 'Verify Keycloak Operator - ${{ parameters.environment }}'
+            inputs:
+              azureSubscription: $(AZURE_SERVICE_CONNECTION)
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                set -e
+
+                echo "Verifying Keycloak Operator deployment for ${{ parameters.environment }}..."
+
+                az aks get-credentials \
+                  --resource-group "$(AKS_RG)" \
+                  --name "$(AKS_NAME)" \
+                  --overwrite-existing
+
+                NAMESPACE="watershed-keycloak"
+
+                # Check if operator deployment exists
+                if kubectl get deployment/keycloak-operator -n $NAMESPACE &>/dev/null; then
+                  kubectl wait --for=condition=available --timeout=300s \
+                    deployment/keycloak-operator -n $NAMESPACE || true
+                  echo "Keycloak Operator is running"
+                else
+                  echo "Keycloak Operator deployment not found"
+                fi
+                
+                kubectl get pods -n $NAMESPACE
+            env:
+              AKS_RG: $(AKS_RG)
+              AKS_NAME: $(AKS_NAME)
+
+          # Install/Upgrade Keycloak Helm Chart
+          - task: AzureCLI@2
+            displayName: '${{ upper(parameters.action) }} Keycloak Helm Chart - ${{ parameters.environment }}'
+            inputs:
+              azureSubscription: $(AZURE_SERVICE_CONNECTION)
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                set -e
+                VALUES_FILE="$(CHART_PATH)/keycloak-operator-istio/values-${{ parameters.environment }}.yaml"
+                echo "========================================="
+                echo "${{ upper(parameters.action) }}ING Keycloak Deployment for ${{ parameters.environment }}"
+                echo "========================================="
+
+                az aks get-credentials \
+                  --resource-group "$(AKS_RG)" \
+                  --name "$(AKS_NAME)" \
+                  --overwrite-existing
+
+                NAMESPACE="watershed-keycloak"
+                VALUES_FILE="$(CHART_PATH)/keycloak-operator-istio/values-${{ parameters.environment }}.yaml"
+
+                # Always cleanup stale SA first if action is install
+                if [ "${{ parameters.action }}" = "install" ]; then
+                  kubectl delete sa keycloak-pod-sa \
+                    -n $NAMESPACE \
+                    --ignore-not-found=true
+                fi
+
+                # Check if Keycloak is already installed
+                if helm status watershed-keycloak -n $NAMESPACE >/dev/null 2>&1; then
+                  echo "Keycloak Helm chart already installed. Checking status..."
+
+                  if kubectl get pods -n $NAMESPACE -l app=keycloak | grep -q "Running"; then
+                    echo "Keycloak pods are already running. Skipping installation..."
+                  else
+                    echo "Keycloak pods not running. Performing ${{ parameters.action }}..."
+                    helm upgrade --install watershed-keycloak \
+                      $(CHART_PATH)/keycloak-operator-istio \
+                      --namespace $NAMESPACE \
+                      -f "$VALUES_FILE" \
+                      --set csi.clientId="$(MANAGED_IDENTITY_CLIENT_ID)" \
+                      --wait \
+                      --timeout 5m \
+                      --atomic
+                  fi
+                else
+                  echo "Installing Keycloak with Istio..."
+                  helm upgrade --install watershed-keycloak \
+                    $(CHART_PATH)/keycloak-operator-istio \
+                    --namespace $NAMESPACE \
+                    -f "$VALUES_FILE" \
+                    --set csi.clientId="$(MANAGED_IDENTITY_CLIENT_ID)" \
+                    --wait \
+                    --timeout 5m \
+                    --atomic
+                fi
+            env:
+              AKS_RG: $(AKS_RG)
+              AKS_NAME: $(AKS_NAME)
+              CHART_PATH: $(CHART_PATH)
+              MANAGED_IDENTITY_CLIENT_ID: $(MANAGED_IDENTITY_CLIENT_ID)
+
+          # Verify Keycloak Deployment
+          - task: AzureCLI@2
+            displayName: 'Verify Keycloak Deployment - ${{ parameters.environment }}'
+            inputs:
+              azureSubscription: $(AZURE_SERVICE_CONNECTION)
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                set -e
+
+                echo "Verifying Keycloak deployment for ${{ parameters.environment }}..."
+
+                az aks get-credentials \
+                  --resource-group "$(AKS_RG)" \
+                  --name "$(AKS_NAME)" \
+                  --overwrite-existing
+
+                NAMESPACE="watershed-keycloak"
+
+
+                # Check if Keycloak pods exist and are ready
+                if kubectl get pods -n $NAMESPACE -l app=keycloak &>/dev/null; then
+                  # Wait for pods to be ready
+                  kubectl wait --for=condition=ready --timeout=600s \
+                    pod -l app=keycloak -n $NAMESPACE || true
+                  
+                  echo "Keycloak pods status:"
+                  kubectl get pods -n $NAMESPACE
+                else
+                  echo "No Keycloak pods found"
+                fi
+                
+                echo ""
+                echo "Keycloak Services:"
+                kubectl get svc -n $NAMESPACE
+                
+                echo "Keycloak deployment verified for ${{ parameters.environment }}"
+            env:
+              AKS_RG: $(AKS_RG)
+              AKS_NAME: $(AKS_NAME)
+
+          # Install/Upgrade Redis Helm Chart
+          - task: AzureCLI@2
+            displayName: '${{ upper(parameters.action) }} Redis Helm Chart - ${{ parameters.environment }}'
+            inputs:
+              azureSubscription: $(AZURE_SERVICE_CONNECTION)
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                set -e
+
+                echo "========================================="
+                echo "${{ upper(parameters.action) }}ING Redis Deployment for ${{ parameters.environment }}"
+                echo "========================================="
+
+                az aks get-credentials \
+                  --resource-group "$(AKS_RG)" \
+                  --name "$(AKS_NAME)" \
+                  --overwrite-existing
+
+                NAMESPACE="watershed-db"
+                VALUES_FILE="$(CHART_PATH)/watershed-redis/values-${{ parameters.environment }}.yaml"
+
+                echo "Cleaning stale Redis NetworkPolicy if present..."
+                kubectl delete networkpolicy watershed-redis -n $NAMESPACE --ignore-not-found=true
+
+                # Check if Redis is already installed
+                if helm list -n $NAMESPACE | grep -q "watershed-redis"; then
+                  echo "Redis Helm chart already installed. Checking status..."
+                  CURRENT_STATUS=$(helm list -n $NAMESPACE | grep watershed-redis | awk '{print $8}')
+                  echo "  Current status: $CURRENT_STATUS"
+                  
+                  # Check if Redis pods are running
+                  if kubectl get pods -n $NAMESPACE -l app.kubernetes.io/name=redis | grep -q "Running"; then
+                    echo "Redis pods are already running. Skipping installation..."
+                  else
+                    echo "Redis helm release exists but pods not running. Attempting upgrade..."
+                    helm upgrade --install watershed-redis \
+                      $(CHART_PATH)/watershed-redis \
+                      --namespace $NAMESPACE \
+                      --set azure.clientId="$(MANAGED_IDENTITY_CLIENT_ID)" \
+                      -f "$VALUES_FILE" \
+                      --wait \
+                      --timeout 3m \
+                      --atomic
+                    echo "Redis upgrade completed"
+                  fi
+                else
+                  echo "Installing Redis chart..."
+                  helm upgrade --install watershed-redis \
+                    $(CHART_PATH)/watershed-redis \
+                    --namespace $NAMESPACE \
+                    -f "$VALUES_FILE" \
+                    --set azure.clientId="$(MANAGED_IDENTITY_CLIENT_ID)" \
+                    --wait \
+                    --timeout 3m \
+                    --atomic
+                  echo "Redis Helm chart installed"
+                fi
+
+                # CRITICAL: Force restart Redis pods to refresh workload identity token
+                echo ""
+                echo "Restarting Redis pods to refresh workload identity token..."
+                kubectl delete pod -n $NAMESPACE -l app.kubernetes.io/name=redis --ignore-not-found=true
+                sleep 20
+                echo "Redis pods restarted"
+            env:
+              AKS_RG: $(AKS_RG)
+              AKS_NAME: $(AKS_NAME)
+              CHART_PATH: $(CHART_PATH)
+              MANAGED_IDENTITY_CLIENT_ID: $(MANAGED_IDENTITY_CLIENT_ID)
+
+          # Verify Redis Deployment
+          - task: AzureCLI@2
+            displayName: 'Verify Redis Deployment - ${{ parameters.environment }}'
+            inputs:
+              azureSubscription: $(AZURE_SERVICE_CONNECTION)
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                set -e
+
+                echo "Verifying Redis deployment for ${{ parameters.environment }}..."
+
+                az aks get-credentials \
+                  --resource-group "$(AKS_RG)" \
+                  --name "$(AKS_NAME)" \
+                  --overwrite-existing
+
+                NAMESPACE="watershed-db"
+
+                # Check if Redis pods exist and are ready
+                if kubectl get pods -n $NAMESPACE -l app.kubernetes.io/name=redis &>/dev/null; then
+                  # Wait for pods to be ready
+                  kubectl wait --for=condition=ready --timeout=300s \
+                    pod -l app.kubernetes.io/name=redis -n $NAMESPACE || true
+                  
+                  echo "Redis pods status:"
+                  kubectl get pods -n $NAMESPACE
+                else
+                  echo "No Redis pods found"
+                fi
+                
+                echo ""
+                echo "Redis Services:"
+                kubectl get svc -n $NAMESPACE
+                
+                echo "Redis deployment verified for ${{ parameters.environment }}"
+            env:
+              AKS_RG: $(AKS_RG)
+              AKS_NAME: $(AKS_NAME)
+
+          # Label namespace for Istio injection
+          - task: AzureCLI@2
+            displayName: 'Label namespace for Istio injection - ${{ parameters.environment }}'
+            inputs:
+              azureSubscription: $(AZURE_SERVICE_CONNECTION)
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                set -e
+
+                az aks get-credentials \
+                  --resource-group "$(AKS_RG)" \
+                  --name "$(AKS_NAME)" \
+                  --overwrite-existing
+
+                NAMESPACE="watershed-${{ parameters.environment }}"
+                echo "Labeling namespace $NAMESPACE for Istio injection..."
+                kubectl label namespace $NAMESPACE istio.io/rev=asm-1-27 --overwrite
+                echo "Namespace $NAMESPACE labeled successfully"
+            env:
+              AKS_RG: $(AKS_RG)
+              AKS_NAME: $(AKS_NAME)
+
+          # Final Verification
+          - task: AzureCLI@2
+            displayName: 'Final Verification - ${{ parameters.environment }}'
+            condition: always()
+            inputs:
+              azureSubscription: $(AZURE_SERVICE_CONNECTION)
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                set -e
+
+                echo "========================================="
+                echo "FINAL DEPLOYMENT VERIFICATION"
+                echo "Environment: ${{ parameters.environment }}"
+                echo "Action: ${{ parameters.action }}"
+                echo "========================================="
+
+                az aks get-credentials \
+                  --resource-group "$(AKS_RG)" \
+                  --name "$(AKS_NAME)" \
+                  --overwrite-existing
+
+                KEYCLOAK_NS="watershed-keycloak"
+                REDIS_NS="watershed-db"
+
+                echo "All Namespaces:"
+                kubectl get namespaces | grep -E "$KEYCLOAK_NS|$REDIS_NS"
+
+                echo ""
+                echo "Keycloak Components (Namespace: $KEYCLOAK_NS):"
+                kubectl get all -n $KEYCLOAK_NS
+
+                echo ""
+                echo "Redis Components (Namespace: $REDIS_NS):"
+                kubectl get all -n $REDIS_NS
+
+                echo ""
+                echo "Helm Releases Summary:"
+                echo "-----------------------------------"
+                echo "Keycloak Operator:"
+                helm list -n $KEYCLOAK_NS | grep keycloak-operator || echo "  Not installed"
+                echo ""
+                echo "Keycloak:"
+                helm list -n $KEYCLOAK_NS | grep watershed-keycloak || echo "  Not installed"
+                echo ""
+                echo "Redis:"
+                helm list -n $REDIS_NS | grep watershed-redis || echo "  Not installed"
+
+                echo ""
+                echo "Service Accounts with Workload Identity:"
+                echo "Keycloak Service Account:"
+                kubectl get sa keycloak-pod-sa -n $KEYCLOAK_NS -o yaml | grep -A2 "annotations:" || echo "  Keycloak service account found"
+                echo ""
+                echo "Redis Master Service Account:"
+                kubectl get sa watershed-redis-master -n $REDIS_NS -o yaml | grep -A2 "annotations:" || echo "  Redis master service account found"
+                echo ""
+                echo "Redis Replica Service Account:"
+                kubectl get sa watershed-redis-replica -n $REDIS_NS -o yaml | grep -A2 "annotations:" || echo "  Redis replica service account found"
+
+                echo ""
+                echo "Federated Credentials Summary:"
+                echo "  - keycloak-pod-${{ parameters.environment }}"
+                echo "  - redis-master-${{ parameters.environment }}"
+                echo "  - redis-replica-${{ parameters.environment }}"
+
+                echo ""
+                echo "========================================="
+                echo "DEPLOYMENT STATUS"
+                echo "========================================="
+                
+                # Check if all components are running
+                ALL_RUNNING=true
+                
+                if ! kubectl get pods -n $KEYCLOAK_NS -l app=keycloak | grep -q "Running"; then
+                  echo "⚠ Keycloak pods are not running"
+                  ALL_RUNNING=false
+                else
+                  echo "✓ Keycloak pods are running"
+                fi
+                
+                if ! kubectl get pods -n $REDIS_NS -l app.kubernetes.io/name=redis | grep -q "Running"; then
+                  echo "⚠ Redis pods are not running"
+                  ALL_RUNNING=false
+                else
+                  echo "✓ Redis pods are running"
+                fi
+                
+                if [ "$ALL_RUNNING" = true ]; then
+                  echo ""
+                  echo "ALL COMPONENTS ARE RUNNING SUCCESSFULLY"
+                else
+                  echo ""
+                  echo "SOME COMPONENTS MAY NOT BE RUNNING. Please check the logs above."
+                fi
+            env:
+              AKS_RG: $(AKS_RG)
+              AKS_NAME: $(AKS_NAME)
+              ENVIRONMENT: ${{ parameters.environment }}

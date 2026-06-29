@@ -1,0 +1,14 @@
+AuraGXP CNPG deployed successfully
+
+Cluster: {{ include "auragxp-cnpg.clusterName" . }}
+Namespace: {{ include "auragxp-cnpg.namespace" . }}
+
+Check health:
+  kubectl get cluster -n {{ include "auragxp-cnpg.namespace" . }}
+  kubectl get pods -n {{ include "auragxp-cnpg.namespace" . }}
+
+Primary endpoint:
+  {{ include "auragxp-cnpg.clusterName" . }}-rw-external:5432
+
+Next:
+  Execute initial SQL setup after pods are healthy.

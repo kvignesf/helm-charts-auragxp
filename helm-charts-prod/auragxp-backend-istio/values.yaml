@@ -1,0 +1,152 @@
+# Existing values (keep all unchanged)
+replicaCount: 2
+image:
+  repository: acrauragxpappsprodesu.azurecr.io/backend
+  tag: auragxp-v1.3-June2026
+  pullPolicy: Always
+resources:
+  requests:
+    cpu: 50m
+    memory: 256Mi
+    ephemeral-storage: 1Gi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+    ephemeral-storage: 1Gi
+
+nodeSelector:
+  auragxp/deploy: application
+service:
+  type: ClusterIP
+  port: 3901
+  targetPort: 3901
+secrets:
+  name: kv-auraprod-esu
+networkPolicy:
+  enabled: true
+  name: backend-istio-network-policy
+namespace: auragxp-prod
+appName: auragxp-backend
+frontendAppName: auragxp-frontend
+dbPort: 5432
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 6
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 70
+
+podAntiAffinity:
+  enabled: true
+  preferredDuringScheduling: true
+  requiredDuringScheduling: false
+
+# NEW: Istio configuration (replaces ingress)
+istio:
+  enabled: true
+  host: auragxp.auratrace.ai
+  gatewayName: auragxp-prod/auragxp-istio-gateway
+  serviceName: auragxp-backend
+  path: /api/ # Routes to /api/ internally
+
+# ADD THIS SECTION FOR POD ANNOTATIONS
+podAnnotations:
+  sidecar.istio.io/inject: "true"
+  proxy.istio.io/config: '{"holdApplicationUntilProxyStarts": true}'
+
+# DISABLE NGINX ingress
+ingress:
+  enabled: false
+
+# CSI Driver Configuration for Azure Key Vault
+csiKeyVault:
+  enabled: true
+  secretProviderClassName: "auragxp-azure-keyvault-prod"
+  syncedK8sSecretName: "kv-auraprod-esu"
+
+  # Key Vault connection details
+  vaultName: "kv-auraprod-esu"
+  vaultUrl: "https://kv-auraprod-esu.vault.azure.net/"
+  tenantId: "788f6d9e-1a66-4385-9aee-01da8900e00b"
+
+  # Workload Identity details
+  clientId: "5b2a0f44-83bf-4034-b0a9-ea002cadd130"
+
+  # ALL secrets from your inventory (35+ secrets)
+  objects:
+    array:
+      - objectName: "PORT"
+        objectType: secret
+      - objectName: "SP-ENV"
+        objectType: secret
+      - objectName: "DB-HOST"
+        objectType: secret
+      - objectName: "DB-PORT"
+        objectType: secret
+      - objectName: "DB-USER"
+        objectType: secret
+      - objectName: "DB-PASSWORD"
+        objectType: secret
+      - objectName: "DB-NAME"
+        objectType: secret
+      - objectName: "AZURE-TENANT-ID"
+        objectType: secret
+      - objectName: "AZURE-CLIENT-ID"
+        objectType: secret
+      - objectName: "AZURE-CLIENT-SECRET"
+        objectType: secret
+      - objectName: "AZURE-STORAGE-CONNECTION-STRING"
+        objectType: secret
+      - objectName: "SHAREPOINT-SITE-ID"
+        objectType: secret
+      - objectName: "SHAREPOINT-DRIVE-ID"
+        objectType: secret
+      - objectName: "BACKEND-KEYCLOAK-ISSUER"
+        objectType: secret
+      - objectName: "BACKEND-KEYCLOAK-CLIENT-ID"
+        objectType: secret
+      - objectName: "BACKEND-KEYCLOAK-CLIENT-SECRET"
+        objectType: secret
+      - objectName: "BACKEND-KEYCLOAK-REDIRECT-URI"
+        objectType: secret
+      - objectName: "BACKEND-KEYCLOAK-ADMIN-CLIENT-ID"
+        objectType: secret
+      - objectName: "BACKEND-KEYCLOAK-ADMIN-CLIENT-SECRET"
+        objectType: secret
+      - objectName: "BACKEND-KC-BASE-URL"
+        objectType: secret
+      - objectName: "BACKEND-KEYCLOAK-REALM"
+        objectType: secret
+      - objectName: "BACKEND-KEYCLOAK-AUDIENCE"
+        objectType: secret
+      - objectName: "BACKEND-KEYCLOAK-JWKS"
+        objectType: secret
+      - objectName: "LICENSE-SERVER-URL"
+        objectType: secret
+      - objectName: "LICENSE-CLIENT-ID"
+        objectType: secret
+      - objectName: "LICENSE-CLIENT-SECRET"
+        objectType: secret
+      - objectName: "KEYCLOAK-ADMIN"
+        objectType: secret
+      - objectName: "KEYCLOAK-ADMIN-PASSWORD"
+        objectType: secret
+      - objectName: "KC-DB-USERNAME"
+        objectType: secret
+      - objectName: "KC-DB-PASSWORD"
+        objectType: secret
+      - objectName: "COMMUNICATION-SERVICES-CONNECTION-STRING"
+        objectType: secret
+      - objectName: "ACS-SENDER-ADDRESS"
+        objectType: secret
+      - objectName: "DEV-URL"
+        objectType: secret
+      - objectName: "REDIS-PASSWORD"
+        objectType: secret
+      - objectName: "ORG-PROVISION-FUNCTION-URL"
+        objectType: secret
+      - objectName: "ORG-SCHEMA-VERSION"
+        objectType: secret
+      - objectName: "TEMP-PASSWORD"
+        objectType: secret

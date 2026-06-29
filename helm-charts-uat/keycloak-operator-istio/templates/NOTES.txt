@@ -1,0 +1,118 @@
+AuraGXP Keycloak (Operator + Istio) has been successfully deployed
+
+Release Name: {{ .Release.Name }}
+Namespace: {{ .Values.namespace | default .Release.Namespace }}
+
+------------------------------------------------------------
+Keycloak Deployment
+------------------------------------------------------------
+Replicas:
+  {{ .Values.keycloak.replicas }}
+
+Hostname:
+  {{ .Values.keycloak.hostname }}
+
+Verify:
+  kubectl get pods -l app.kubernetes.io/name={{ include "keycloak-operator-istio.name" . }} \
+    -n {{ .Values.namespace | default .Release.Namespace }}
+
+------------------------------------------------------------
+Database Configuration (CNPG)
+------------------------------------------------------------
+Database Host:
+  {{ .Values.keycloak.db.host }}
+
+Database Port:
+  {{ .Values.keycloak.db.port }}
+
+Database Name:
+  {{ .Values.keycloak.db.database }}
+
+Credentials Source:
+  Azure Key Vault (CSI / External Secrets)
+
+Verify Secret:
+  kubectl get secret {{ .Values.csi.secretName }} \
+    -n {{ .Values.namespace | default .Release.Namespace }}
+
+------------------------------------------------------------
+Azure Key Vault CSI / Secret Mapping
+------------------------------------------------------------
+Synced Kubernetes Secret:
+  {{ .Values.csi.secretName }}
+
+Key Mappings:
+  DB Username  → {{ .Values.csi.keyMappings.dbUsername }}
+  DB Password  → {{ .Values.csi.keyMappings.dbPassword }}
+  Admin User   → {{ .Values.csi.keyMappings.adminUsername }}
+  Admin Pass   → {{ .Values.csi.keyMappings.adminPassword }}
+
+------------------------------------------------------------
+Istio Configuration
+------------------------------------------------------------
+Gateway:
+  {{ .Values.istio.gatewayName }}
+
+VirtualService:
+  {{ .Values.istio.virtualServiceName }}
+
+Verify:
+  kubectl get gateway {{ .Values.istio.gatewayName }} \
+    -n {{ .Values.namespace | default .Release.Namespace }}
+
+  kubectl get virtualservice {{ .Values.istio.virtualServiceName }} \
+    -n {{ .Values.namespace | default .Release.Namespace }}
+
+------------------------------------------------------------
+TLS / Certificate
+------------------------------------------------------------
+{{- if .Values.certificate.enabled }}
+
+TLS Secret:
+  {{ .Values.certificate.secretName }}
+
+DNS Names:
+{{- range .Values.certificate.dnsNames }}
+  - {{ . }}
+{{- end }}
+
+Issuer:
+  {{ .Values.certificate.issuerRef.name }} ({{ .Values.certificate.issuerRef.kind }})
+
+Verify:
+  kubectl get certificate \
+    -n {{ .Values.namespace | default .Release.Namespace }}
+
+{{- else }}
+TLS certificate management is disabled.
+{{- end }}
+
+------------------------------------------------------------
+Autoscaling
+------------------------------------------------------------
+{{- if .Values.autoscaling.enabled }}
+
+HPA Enabled:
+  Min Replicas: {{ .Values.autoscaling.minReplicas }}
+  Max Replicas: {{ .Values.autoscaling.maxReplicas }}
+
+Verify:
+  kubectl get hpa \
+    -n {{ .Values.namespace | default .Release.Namespace }}
+
+{{- else }}
+Autoscaling is disabled.
+{{- end }}
+
+------------------------------------------------------------
+Access URL
+------------------------------------------------------------
+Keycloak URL:
+  https://{{ .Values.keycloak.hostname }}
+
+------------------------------------------------------------
+Installation Complete
+------------------------------------------------------------
+Use `kubectl describe pod` or `kubectl logs` for troubleshooting.
+Happy securing identities!
+

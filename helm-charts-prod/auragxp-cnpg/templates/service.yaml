@@ -1,0 +1,44 @@
+{{- if .Values.services.internalAccess }}
+---
+# Internal read-write service (ClusterIP)
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "auragxp-cnpg.clusterName" . }}-rw
+  namespace: {{ include "auragxp-cnpg.namespace" . }}
+  labels:
+    {{- include "auragxp-cnpg.labels" . | nindent 4 }}
+    component: database
+    access: internal-rw
+spec:
+  type: ClusterIP
+  ports:
+  - name: postgresql
+    port: 5432
+    targetPort: 5432
+    protocol: TCP
+  selector:
+    cnpg.io/cluster: {{ include "auragxp-cnpg.clusterName" . }}
+    cnpg.io/instanceRole: primary
+---
+# Internal read-only service (ClusterIP)
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "auragxp-cnpg.clusterName" . }}-ro
+  namespace: {{ include "auragxp-cnpg.namespace" . }}
+  labels:
+    {{- include "auragxp-cnpg.labels" . | nindent 4 }}
+    component: database
+    access: internal-ro
+spec:
+  type: ClusterIP
+  ports:
+  - name: postgresql
+    port: 5432
+    targetPort: 5432
+    protocol: TCP
+  selector:
+    cnpg.io/cluster: {{ include "auragxp-cnpg.clusterName" . }}
+    cnpg.io/instanceRole: replica
+{{- end }}

@@ -1,0 +1,173 @@
+# Sample values for AuraGXP CNPG PostgreSQL Database
+
+namespace: auragxp-db
+
+serviceAccount:
+  create: true
+  name: externalsecretoperator-serviceaccount
+  clientId: 5b2a0f44-83bf-4034-b0a9-ea002cadd130
+  tenantId: 788f6d9e-1a66-4385-9aee-01da8900e00b
+
+csiKeyVault:
+  enabled: true
+  secretProviderClassName: "auragxp-db-kv-prod"
+  syncedK8sSecretName: "auragxp-cnpg-admin-secret"
+  vaultName: "kv-auraprod-esu"
+  vaultUrl: "https://kv-auraprod-esu.vault.azure.net/"
+  tenantId: "788f6d9e-1a66-4385-9aee-01da8900e00b"
+  clientId: "5b2a0f44-83bf-4034-b0a9-ea002cadd130"
+  objects:
+    array:
+      - objectName: POSTGRES-ADMIN-USER
+        objectType: secret
+      - objectName: POSTGRES-ADMIN-PASSWORD
+        objectType: secret
+      - objectName: POSTGRES-DB
+        objectType: secret
+      - objectName: CNPG-STORAGE-ACCOUNT-KEY
+        objectType: secret
+      - objectName: CNPG-STORAGE-ACCOUNT
+        objectType: secret
+
+cluster:
+  name: auragxp-db-cluster
+  namespace: auragxp-db
+  description: "AuraGXP PostgreSQL Database"
+  instances: 2
+  storageSize: 50Gi
+
+  bootstrap:
+    database: aura_trace_app_db
+    owner: aura_trace_super_admin
+
+  adminUser:
+    name: aura_trace_super_admin
+
+  postgresql:
+    maxConnections: "500"
+    sharedBuffers: "1GB"
+    workMem: "32MB"
+    maintenanceWorkMem: "256MB"
+    effectiveCacheSize: "3GB"
+    checkpointTimeout: "15min"
+    checkpointCompletionTarget: "0.9"
+    walWriterDelay: "200ms"
+
+# ── Backup storage destinations ───────────────────────────────────
+# Three separate containers for three backup tiers
+backup:
+  dailyDestinationPath: "https://stauragxpbackendprdesu.blob.core.windows.net/cnpg-daily"
+  weeklyDestinationPath: "https://stauragxpbackendprdesu.blob.core.windows.net/cnpg-weekly"
+  monthlyDestinationPath: "https://stauragxpbackendprdesu.blob.core.windows.net/cnpg-monthly"
+  retentionPolicy: "30d"
+
+
+# --------------------------------------------------
+
+# Restore
+
+# --------------------------------------------------
+
+restore:
+
+  enabled: true
+
+  cloneClusterName: auragxp-db-cluster
+
+  instances: 2
+
+  storageSize: 50Gi
+
+  sourcePath: https://stauragxpbackendprdesu.blob.core.windows.net/cnpg-backups
+
+  secretName: auragxp-cnpg-admin-secret
+
+  postgresql:
+
+    maxConnections: "500"
+
+    sharedBuffers: "1GB"
+
+  resources:
+
+    requests:
+
+      cpu: "500m"
+
+      memory: "1Gi"
+
+    limits:
+
+      cpu: "2"
+
+      memory: "4Gi"
+
+services:
+  enabled: true
+  internalAccess: false
+  externalAccess: true
+  allowedIPs:
+    - "52.255.207.143/32"
+    - "52.255.207.145/32"
+    - "13.72.72.20/32"
+    - "52.255.207.144/32"
+    - "52.255.207.146/32"
+    - "191.237.27.74/32"
+    - "40.121.16.193/32"
+    - "130.107.72.103/32"
+
+      # Azure Function outbound IPs
+    - "4.236.197.225/32"
+    - "4.236.197.242/32"
+    - "4.236.198.76/32"
+    - "4.236.198.109/32"
+    - "4.236.198.110/32"
+    - "4.236.198.141/32"
+
+  rw:
+    nodePort: 31001
+  ro:
+    nodePort: 31002
+
+networkPolicy:
+  enabled: true
+  defaultDenyName: default-deny-db
+  dnsName: allow-dns-db
+  frontendNamespace: auragxp-frontend
+  backendNamespace: auragxp-backend
+  additionalAllowedNamespaces:
+    - auragxp-keycloak
+    - monitoring
+
+monitoring:
+  enabled: true
+  podMonitor:
+    enabled: true
+    interval: 30s
+    scrapeTimeout: 10s
+
+resources:
+  requests:
+    cpu: "500m"
+    memory: "1Gi"
+  limits:
+    cpu: "2"
+    memory: "4Gi"
+
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          labelSelector:
+            matchExpressions:
+              - key: cnpg.io/cluster
+                operator: In
+                values:
+                  - auragxp-db-cluster
+          topologyKey: kubernetes.io/hostname
+
+tolerations: []
+nodeSelector: {}
+
+environment: "prod"

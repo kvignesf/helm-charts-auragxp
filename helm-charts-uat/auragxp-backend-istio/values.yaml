@@ -1,0 +1,221 @@
+# Application Configuration
+replicaCount: 2
+appName: auragxp-backend-uat
+namespace: auragxp-uat
+
+image:
+  repository: acrglobalwus.azurecr.io/auragxp/uat/backend
+  tag: "ba5524f4"
+  pullPolicy: Always
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 256Mi
+    ephemeral-storage: 1Gi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+    ephemeral-storage: 1Gi
+
+nodeSelector:
+  auragxp/deploy: application
+
+service:
+  type: ClusterIP
+  port: 3901
+  targetPort: 3901
+
+secrets:
+  name: kv-auragxp-uat-eus-sh
+
+networkPolicy:
+  enabled: true
+  name: backend-istio-network-policy
+  egress:
+    dbPort: 5432
+    redisPort: 6379
+    keycloakPort: 8080
+    dnsPort: 53
+    istioControlPlanePort: 15012
+
+# Service Account
+serviceAccount:
+  name: auragxp-serviceaccount-uat
+
+# Database Configuration
+database:
+  cluster:
+    readWriteHost: auragxp-db-uat-cluster-rw.auragxp-db-uat.svc.cluster.local
+    readOnlyHost: auragxp-db-uat-cluster-ro.auragxp-db-uat.svc.cluster.local
+    port: 5432
+    namespace: auragxp-db-uat
+
+# Redis Configuration
+redis:
+  host: auragxp-redis-uat-master.auragxp-db-uat.svc.cluster.local
+  port: 6379
+  namespace: auragxp-db-uat
+
+# Keycloak Configuration
+keycloak:
+  namespace: auragxp-keycloak-uat
+  port: 8080
+
+# Frontend Configuration
+frontend:
+  appName: auragxp-frontend-uat
+
+# Istio Configuration
+istio:
+  enabled: true
+  host: auragxp-uat.auratrace.ai
+  gatewayName: auragxp-uat/watershed-istio-gateway
+  serviceName: auragxp-backend-uat
+  path: /api/
+  destinationRuleName: auragxp-backend-uat-dr
+  trafficPolicy:
+    tlsMode: ISTIO_MUTUAL
+    loadBalancer: LEAST_CONN
+    maxConnections: 1000
+    http1MaxPendingRequests: 100
+    maxRequestsPerConnection: 100
+    consecutive5xxErrors: 5
+    interval: 10s
+    baseEjectionTime: 30s
+    maxEjectionPercent: 10
+
+# Ingress (disabled)
+ingress:
+  enabled: false
+
+# Pod Annotations
+podAnnotations:
+  sidecar.istio.io/inject: "true"
+  proxy.istio.io/config: '{"holdApplicationUntilProxyStarts": true}'
+
+# Autoscaling
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 6
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 70
+
+# Pod Anti-Affinity
+podAntiAffinity:
+  enabled: true
+  preferredDuringScheduling: true
+  requiredDuringScheduling: false
+
+# CSI Driver Configuration for Azure Key Vault
+csiKeyVault:
+  enabled: true
+  secretProviderClassName: "auragxp-azure-keyvault-uat"
+  syncedK8sSecretName: "kv-auragxp-uat-eus-sh"
+
+  # Key Vault connection details
+  vaultName: "kv-auragxp-uat-eus-sh"
+  vaultUrl: "https://kv-auragxp-uat-eus-sh.vault.azure.net/"
+  tenantId: "788f6d9e-1a66-4385-9aee-01da8900e00b"
+
+  # Workload Identity details
+  clientId: "e09e2815-5e84-47c7-b4e2-6070e08ae362"
+
+  # ALL secrets from your inventory (35+ secrets)
+  objects:
+    array:
+      - objectName: "ACR-USERNAME"
+        objectType: secret
+      - objectName: "ACR-PASSWORD"
+        objectType: secret
+      - objectName: "ACR-SERVER"
+        objectType: secret
+      - objectName: "PORT"
+        objectType: secret
+      - objectName: "SP-ENV"
+        objectType: secret
+      - objectName: "DB-HOST"
+        objectType: secret
+      - objectName: "DB-PORT"
+        objectType: secret
+      - objectName: "DB-USER"
+        objectType: secret
+      - objectName: "DB-PASSWORD"
+        objectType: secret
+      - objectName: "DB-NAME"
+        objectType: secret
+      - objectName: "AZURE-TENANT-ID"
+        objectType: secret
+      - objectName: "AZURE-CLIENT-ID"
+        objectType: secret
+      - objectName: "AZURE-CLIENT-SECRET"
+        objectType: secret
+      - objectName: "AZURE-STORAGE-CONTAINER-NAME"
+        objectType: secret
+      - objectName: "AZURE-VIDEO-CONTAINER-NAME"
+        objectType: secret
+      - objectName: "AZURE-STORAGE-ACCOUNT-NAME"
+        objectType: secret
+      - objectName: "AZURE-STORAGE-CONNECTION-STRING"
+        objectType: secret
+      - objectName: "SHAREPOINT-SITE-ID"
+        objectType: secret
+      - objectName: "SHAREPOINT-DRIVE-ID"
+        objectType: secret
+      - objectName: "BACKEND-KEYCLOAK-ISSUER"
+        objectType: secret
+      - objectName: "BACKEND-KEYCLOAK-CLIENT-ID"
+        objectType: secret
+      - objectName: "BACKEND-KEYCLOAK-CLIENT-SECRET"
+        objectType: secret
+      - objectName: "BACKEND-KEYCLOAK-REDIRECT-URI"
+        objectType: secret
+      - objectName: "BACKEND-KEYCLOAK-ADMIN-CLIENT-ID"
+        objectType: secret
+      - objectName: "BACKEND-KEYCLOAK-ADMIN-CLIENT-SECRET"
+        objectType: secret
+      - objectName: "BACKEND-KC-BASE-URL"
+        objectType: secret
+      - objectName: "BACKEND-KEYCLOAK-REALM"
+        objectType: secret
+      - objectName: "BACKEND-KEYCLOAK-AUDIENCE"
+        objectType: secret
+      - objectName: "BACKEND-KEYCLOAK-JWKS"
+        objectType: secret
+      - objectName: "LICENSE-SERVER-URL"
+        objectType: secret
+      - objectName: "LICENSE-CLIENT-ID"
+        objectType: secret
+      - objectName: "LICENSE-CLIENT-SECRET"
+        objectType: secret
+      - objectName: "KEYCLOAK-ADMIN"
+        objectType: secret
+      - objectName: "KEYCLOAK-ADMIN-PASSWORD"
+        objectType: secret
+      - objectName: "KC-DB-USERNAME"
+        objectType: secret
+      - objectName: "KC-DB-PASSWORD"
+        objectType: secret
+      - objectName: "COMMUNICATION-SERVICES-CONNECTION-STRING"
+        objectType: secret
+      - objectName: "ACS-SENDER-ADDRESS"
+        objectType: secret
+      - objectName: "DEV-URL"
+        objectType: secret
+      - objectName: "FUNCTION-APP-URL"
+        objectType: secret
+      - objectName: "AZURE-WEB-CONTAINER-NAME"
+        objectType: secret
+      - objectName: "REDIS-PASSWORD"
+        objectType: secret
+      - objectName: "ORG-PROVISION-FUNCTION-URL"
+        objectType: secret
+      - objectName: "SCORM-PROCESSOR-FUNCTION-URL"
+        objectType: secret
+      - objectName: "ORG-SCHEMA-VERSION"
+        objectType: secret
+      - objectName: "TEMP-PASSWORD"
+        objectType: secret
+      - objectName: "WORKFLOW-EMAILS"
+        objectType: secret

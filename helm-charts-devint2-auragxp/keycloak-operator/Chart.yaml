@@ -1,0 +1,9 @@
+apiVersion: v2
+name: keycloak-operator
+description: A Helm chart for Keycloak Operator
+type: application
+version: 0.1.0
+appVersion: 26.4.7
+maintainers:
+  - name: Vigneshwaran
+    email: vicky@example.com

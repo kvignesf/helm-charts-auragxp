@@ -1,0 +1,167 @@
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: watershed-main-vs
+  namespace: {{ .Values.namespace }}
+  labels:
+    app.kubernetes.io/managed-by: Helm
+  annotations:
+    meta.helm.sh/release-name: {{ .Release.Name }}
+    meta.helm.sh/release-namespace: {{ .Release.Namespace }}
+spec:
+  gateways:
+    - {{ .Values.istio.gatewayNamespace }}/{{ .Values.istio.gatewayName }}
+  hosts:
+    - {{ .Values.istio.hostname }}
+  http:
+    # ACME challenge
+    - match:
+        - uri:
+            prefix: /.well-known/acme-challenge/
+      route:
+        - destination:
+            host: {{ .Values.acme.solverPodName }}.{{ .Values.acme.solverNamespace }}.svc.cluster.local
+            port:
+              number: {{ .Values.acme.solverPort }}
+
+    # API proxy → FRONTEND
+    - match:
+        - uri:
+            prefix: /api/proxy/
+      headers:
+        request:
+          set:
+            Authorization: "%REQ(Authorization)%"
+            Cookie: "%REQ(Cookie)%"
+            X-Forwarded-Host: {{ .Values.istio.hostname }}
+            X-Forwarded-Port: "443"
+            X-Forwarded-Proto: https
+      route:
+        - destination:
+            host: {{ .Values.istio.frontendService }}.{{ .Values.namespace }}.svc.cluster.local
+            port:
+              number: {{ .Values.istio.frontendPort }}
+
+    # Auth/session → FRONTEND
+    - match:
+        - uri:
+            prefix: /api/auth/
+        - uri:
+            prefix: /api/org/select
+        - uri:
+            prefix: /api/keepalive
+        - uri:
+            prefix: /api/logout
+      headers:
+        request:
+          set:
+            Authorization: "%REQ(Authorization)%"
+            Cookie: "%REQ(Cookie)%"
+            X-Forwarded-Host: {{ .Values.istio.hostname }}
+            X-Forwarded-Port: "443"
+            X-Forwarded-Proto: https
+      route:
+        - destination:
+            host: {{ .Values.istio.frontendService }}.{{ .Values.namespace }}.svc.cluster.local
+            port:
+              number: {{ .Values.istio.frontendPort }}
+
+    # Backend APIs → BACKEND
+    - match:
+        - uri:
+            prefix: /api/
+      timeout: 30s
+      headers:
+        request:
+          set:
+            X-Forwarded-Host: {{ .Values.istio.hostname }}
+            X-Forwarded-Port: "443"
+            X-Forwarded-Proto: https
+      route:
+        - destination:
+            host: {{ .Values.istio.backendService }}.{{ .Values.namespace }}.svc.cluster.local
+            port:
+              number: {{ .Values.istio.backendPort }}
+
+    # Keycloak
+    - match:
+        - uri:
+            prefix: /keycloak
+      timeout: 30s
+      route:
+        - destination:
+            host: {{ .Values.istio.keycloakService }}.{{ .Values.istio.keycloakNamespace }}.svc.cluster.local
+            port:
+              number: {{ .Values.istio.keycloakPort }}
+
+    # Static assets
+    - match:
+        - uri:
+            prefix: /_next/
+        - uri:
+            prefix: /static/
+      route:
+        - destination:
+            host: {{ .Values.istio.frontendService }}.{{ .Values.namespace }}.svc.cluster.local
+            port:
+              number: {{ .Values.istio.frontendPort }}
+
+    # SCORM external
+    - match:
+        - uri:
+            prefix: /scorm/
+      rewrite:
+        uri: /
+      headers:
+        request:
+          set:
+            Host: {{ .Values.istio.scormHost }}
+            X-Forwarded-Proto: https
+      route:
+        - destination:
+            host: {{ .Values.istio.scormHost }}
+            port:
+              number: 443
+
+    # Support
+    - match:
+        - uri:
+            exact: /support
+        - uri:
+            prefix: /support/
+      timeout: 30s
+      rewrite:
+        uri: /
+      route:
+        - destination:
+            host: {{ .Values.istio.supportService }}.{{ .Values.namespace }}.svc.cluster.local
+            port:
+              number: {{ .Values.istio.supportPort }}
+
+    # Grafana
+    - match:
+        - uri:
+            exact: /grafana
+        - uri:
+            prefix: /grafana/
+      headers:
+        request:
+          add:
+            X-Forwarded-Prefix: /grafana
+            X-Forwarded-Proto: http
+      route:
+        - destination:
+            host: {{ .Values.istio.grafanaService }}.{{ .Values.istio.grafanaNamespace }}.svc.cluster.local
+            port:
+              number: {{ .Values.istio.grafanaPort }}
+
+    # Catch-all → FRONTEND
+    - match:
+        - uri:
+            prefix: /
+      timeout: 30s
+      route:
+        - destination:
+            host: {{ .Values.istio.frontendService }}.{{ .Values.namespace }}.svc.cluster.local
+            port:
+              number: {{ .Values.istio.frontendPort }}

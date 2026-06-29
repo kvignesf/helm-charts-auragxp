@@ -1,0 +1,6 @@
+apiVersion: v2
+name: auragxp-backup-devint2-restore
+description: CNPG backup scheduling, monthly archiving, and PITR restore for auragxp
+type: application
+version: 1.0.0
+appVersion: "1.0"

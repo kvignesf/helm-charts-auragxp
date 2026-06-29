@@ -1,0 +1,78 @@
+watershed Keycloak (Operator + Istio) has been successfully deployed
+
+Release Name: {{ .Release.Name }}
+Namespace: {{ .Values.namespace | default .Release.Namespace }}
+
+------------------------------------------------------------
+Keycloak Deployment
+------------------------------------------------------------
+Replicas:
+  {{ .Values.keycloak.replicas }}
+
+Hostname:
+  {{ .Values.keycloak.hostname }}
+
+Verify:
+  kubectl get keycloak -n {{ .Values.namespace | default .Release.Namespace }}
+  kubectl get pods -l app=keycloak -n {{ .Values.namespace | default .Release.Namespace }}
+
+------------------------------------------------------------
+Database Configuration (CNPG)
+------------------------------------------------------------
+Database Host:
+  {{ .Values.keycloak.db.host }}
+
+Database Port:
+  {{ .Values.keycloak.db.port }}
+
+Database Name:
+  {{ .Values.keycloak.db.database }}
+
+Credentials Source:
+  Azure Key Vault (CSI Driver)
+
+Verify Secret:
+  kubectl get secret {{ .Values.csi.secretName }} -n {{ .Values.namespace | default .Release.Namespace }}
+
+------------------------------------------------------------
+Azure Key Vault CSI Secret Mapping
+------------------------------------------------------------
+Synced Kubernetes Secret:
+  {{ .Values.csi.secretName }}
+
+Secret Provider Class:
+  {{ .Release.Name }}-kv
+
+Key Mappings:
+  DB Username  → {{ .Values.csi.keyMappings.dbUsername }}
+  DB Password  → {{ .Values.csi.keyMappings.dbPassword }}
+  Admin User   → {{ .Values.csi.keyMappings.adminUsername }}
+  Admin Pass   → {{ .Values.csi.keyMappings.adminPassword }}
+
+------------------------------------------------------------
+Access URL
+------------------------------------------------------------
+Keycloak URL:
+  https://{{ .Values.keycloak.hostname }}/keycloak
+
+Admin Console:
+  https://{{ .Values.keycloak.hostname }}/keycloak/admin
+
+------------------------------------------------------------
+Useful Commands
+------------------------------------------------------------
+Check Keycloak status:
+  kubectl get keycloak {{ .Release.Name }} -n {{ .Values.namespace | default .Release.Namespace }} -o yaml
+
+Check Pods:
+  kubectl get pods -n {{ .Values.namespace | default .Release.Namespace }} -l app=keycloak
+
+Check Logs:
+  kubectl logs -n {{ .Values.namespace | default .Release.Namespace }} -l app=keycloak
+
+Port Forward (for local access):
+  kubectl port-forward svc/keycloak-service -n {{ .Values.namespace | default .Release.Namespace }} 8080:8080
+
+------------------------------------------------------------
+Installation Complete
+------------------------------------------------------------

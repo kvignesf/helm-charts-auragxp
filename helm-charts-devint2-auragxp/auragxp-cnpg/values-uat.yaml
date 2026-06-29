@@ -1,0 +1,174 @@
+# Sample values for Auragxp DEVINT2 CNPG PostgreSQL Database
+
+namespace: auragxp-db-devint2
+
+environment: devint2
+
+serviceAccount:
+  create: false
+  name: auragxp-serviceaccount-devint2
+  clientId: e09e2815-5e84-47c7-b4e2-6070e08ae362
+  tenantId: 788f6d9e-1a66-4385-9aee-01da8900e00b
+
+csiKeyVault:
+  enabled: true
+  secretProviderClassName: "auragxp-db-kv-devint2"
+  syncedK8sSecretName: "auragxp-cnpg-devint2-admin-secret"
+  vaultName: "kv-agxp-dev-eus-sh"
+  vaultUrl: "https://kv-agxp-dev-eus-sh.vault.azure.net/"
+  tenantId: "788f6d9e-1a66-4385-9aee-01da8900e00b"
+  clientId: "e09e2815-5e84-47c7-b4e2-6070e08ae362"
+  objects:
+    array:
+      - objectName: POSTGRES-ADMIN-USER
+        objectType: secret
+      - objectName: POSTGRES-ADMIN-PASSWORD
+        objectType: secret
+      - objectName: POSTGRES-DB
+        objectType: secret
+      - objectName: CNPG-STORAGE-ACCOUNT-KEY
+        objectType: secret
+      - objectName: CNPG-STORAGE-ACCOUNT
+        objectType: secret
+
+cluster:
+  name: auragxp-db-devint2-cluster
+  namespace: auragxp-db-devint2
+  description: "Auragxp Devint2 PostgreSQL Database"
+  instances: 2
+  storageSize: 50Gi
+  imageName: ghcr.io/cloudnative-pg/postgresql:18.1
+  enableSuperuserAccess: true
+
+  bootstrap:
+    database: aura_qpos_app_db
+    owner: aura_qpos_super_admin
+
+  adminUser:
+    name: aura_qpos_super_admin
+
+  postgresql:
+    maxConnections: "500"
+    sharedBuffers: "1GB"
+    workMem: "32MB"
+    maintenanceWorkMem: "256MB"
+    effectiveCacheSize: "3GB"
+    checkpointTimeout: "15min"
+    checkpointCompletionTarget: "0.9"
+    walWriterDelay: "200ms"
+
+# Backup storage destinations
+backup:
+  dailyDestinationPath: "https://sabackendwus.blob.core.windows.net/cnpg-daily"
+  weeklyDestinationPath: "https://sabackendwus.blob.core.windows.net/cnpg-weekly"
+  monthlyDestinationPath: "https://sabackendwus.blob.core.windows.net/cnpg-monthly"
+  retentionPolicy: "30d"
+  wal:
+    compression: gzip
+    maxParallel: 2
+  data:
+    compression: gzip
+    immediateCheckpoint: false
+
+# Restore configuration
+restore:
+  enabled: false
+  cloneClusterName: auragxp-db-devint2-cluster
+  instances: 2
+  storageSize: 50Gi
+  sourcePath: https://sabackendwus.blob.core.windows.net/cnpg-backups
+  targetTime: ""
+  secretName: auragxp-cnpg-devint2-admin-secret
+  postgresql:
+    maxConnections: "500"
+    sharedBuffers: "1GB"
+  resources:
+    requests:
+      cpu: "500m"
+      memory: "1Gi"
+    limits:
+      cpu: "2"
+      memory: "4Gi"
+
+# Service configuration
+services:
+  enabled: true
+  internalAccess: false
+  externalAccess: true
+  publicIPName: "auragxp-dev2-db-pip"
+  allowedIPs:
+    - "52.233.72.160/32"
+    - "52.151.57.252/32"
+    - "52.175.226.60/32"
+    - "52.175.255.184/32"
+    - "52.151.63.62/32"
+    - "20.42.128.118/32"
+    - "52.229.30.210/32"
+    - "20.151.50.190/32"
+    - "202.83.44.245/32"
+  rw:
+    nodePort: 32001
+  ro:
+    nodePort: 32002
+
+# Network Policy configuration
+networkPolicy:
+  enabled: true
+  defaultDenyName: default-deny-db
+  dnsName: allow-dns-db
+  frontendNamespace: auragxp-devint2
+  backendNamespace: auragxp-devint2
+  keycloakNamespace: auragxp-keycloak-devint2
+  cnpgOperatorNamespace: cnpg-system
+  additionalAllowedNamespaces:
+    - auragxp-keycloak-devint2
+    - monitoring
+  backendLabelSelector:
+    app: auragxp-backend-devint2
+  keycloakLabelSelector:
+    app.kubernetes.io/instance: auragxp-keycloak-devint2
+  operatorPort: 8000
+  kubeAPIPort: 443
+
+# Monitoring configuration
+monitoring:
+  enabled: true
+  podMonitor:
+    enabled: true
+    interval: 30s
+    scrapeTimeout: 10s
+
+# Resource configuration
+resources:
+  requests:
+    cpu: "500m"
+    memory: "1Gi"
+  limits:
+    cpu: "2"
+    memory: "4Gi"
+
+# Affinity configuration
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          labelSelector:
+            matchExpressions:
+              - key: cnpg.io/cluster
+                operator: In
+                values:
+                  - auragxp-db-devint2-cluster
+          topologyKey: kubernetes.io/hostname
+
+tolerations: []
+nodeSelector: {}
+
+# Istio configuration
+istio:
+  sidecarInjection: false
+
+# CSI Driver configuration
+csi:
+  driverName: secrets-store.csi.k8s.io
+  mountPath: /mnt/secrets-store

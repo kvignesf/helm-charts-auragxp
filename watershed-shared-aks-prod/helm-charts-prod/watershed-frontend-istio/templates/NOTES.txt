@@ -1,0 +1,122 @@
+watershed Frontend Service has been successfully deployed
+
+Release Name: {{ .Release.Name }}
+Namespace: {{ .Values.namespace | default .Release.Namespace }}
+Environment: {{ .Values.environment | default "env" }}
+
+------------------------------------------------------------
+Frontend Deployment
+------------------------------------------------------------
+Application Name:
+  {{ .Values.appName }}
+
+Replicas:
+  {{ .Values.replicaCount }}
+
+Container Image:
+  {{ .Values.image.repository }}:{{ .Values.image.tag }}
+
+Verify:
+  kubectl get pods -l app={{ .Values.appName }} \
+    -n {{ .Values.namespace | default .Release.Namespace }}
+
+------------------------------------------------------------
+Secrets & Configuration
+------------------------------------------------------------
+Secrets Source:
+  Azure Key Vault (CSI Driver)
+
+Synced Kubernetes Secret:
+  {{ .Values.csiKeyVault.syncedK8sSecretName }}
+
+Verify:
+  kubectl get secret {{ .Values.csiKeyVault.syncedK8sSecretName }} \
+    -n {{ .Values.namespace | default .Release.Namespace }}
+
+------------------------------------------------------------
+Service Configuration
+------------------------------------------------------------
+Service Type:
+  {{ .Values.service.type }}
+
+Service Port:
+  {{ .Values.service.port }}
+
+Verify:
+  kubectl get svc {{ .Values.appName }} \
+    -n {{ .Values.namespace | default .Release.Namespace }}
+
+------------------------------------------------------------
+Istio Configuration
+------------------------------------------------------------
+{{- if .Values.istio.enabled }}
+
+Gateway:
+  {{ .Values.istio.gateway }}
+
+Host:
+  {{ .Values.istio.host }}
+
+DestinationRule:
+  {{ .Values.appName }}-dr
+
+Verify:
+  kubectl get destinationrule {{ .Values.appName }}-dr \
+    -n {{ .Values.namespace | default .Release.Namespace }}
+
+Frontend URL:
+  https://{{ .Values.istio.host }}
+
+{{- else }}
+Istio is disabled for this service.
+{{- end }}
+
+------------------------------------------------------------
+Autoscaling
+------------------------------------------------------------
+{{- if .Values.autoscaling.enabled }}
+
+HPA Enabled:
+  Min Replicas: {{ .Values.autoscaling.minReplicas }}
+  Max Replicas: {{ .Values.autoscaling.maxReplicas }}
+  Target CPU Utilization: {{ .Values.autoscaling.targetCPUUtilizationPercentage }}%
+  Target Memory Utilization: {{ .Values.autoscaling.targetMemoryUtilizationPercentage }}%
+
+Verify:
+  kubectl get hpa {{ .Values.appName }} \
+    -n {{ .Values.namespace | default .Release.Namespace }}
+
+{{- else }}
+Autoscaling is disabled.
+{{- end }}
+
+------------------------------------------------------------
+Network Policy
+------------------------------------------------------------
+{{- if .Values.networkPolicy.enabled }}
+
+NetworkPolicy Name:
+  {{ .Values.networkPolicy.name }}
+
+Verify:
+  kubectl get networkpolicy {{ .Values.networkPolicy.name }} \
+    -n {{ .Values.namespace | default .Release.Namespace }}
+
+{{- else }}
+Network policies are disabled.
+{{- end }}
+
+------------------------------------------------------------
+Backend & Auth Integration
+------------------------------------------------------------
+Backend Service:
+  {{ .Values.backendAppName }}:{{ .Values.backendPort }}
+
+Keycloak Service:
+  {{ .Values.keycloakAppName }}:{{ .Values.keycloakPort }}
+
+------------------------------------------------------------
+Installation Complete
+------------------------------------------------------------
+Use `kubectl describe pod` or `kubectl logs` for troubleshooting.
+Happy shipping the UI!

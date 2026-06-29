@@ -1,0 +1,10 @@
+apiVersion: v2
+name: auragxp-redis-uat
+description: Redis for Auragxp platform
+type: application
+version: 0.1.0
+
+dependencies:
+  - name: redis
+    version: 25.3.2
+    repository: https://charts.bitnami.com/bitnami

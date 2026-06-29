@@ -1,0 +1,164 @@
+# Redis Configuration
+redis:
+  # Architecture: standalone or replication
+  architecture: replication
+
+  # Authentication configuration
+  auth:
+    enabled: true
+    existingSecret: auragxp-redis-uat-auth
+    existingSecretPasswordKey: redis-password
+
+  # Master node configuration
+  master:
+    persistence:
+      enabled: true
+      size: 8Gi
+      accessModes:
+        - ReadWriteOnce
+
+    service:
+      type: LoadBalancer
+      ports:
+        redis: 6379
+      loadBalancerSourceRanges:
+        - 52.233.72.160/32
+        - 52.151.57.252/32
+        - 52.175.226.60/32
+        - 52.175.255.184/32
+        - 52.151.63.62/32
+        - 20.42.128.118/32
+        - 52.229.30.210/32
+        - 202.83.44.245/32
+        - 20.151.50.190/32
+      annotations:
+        service.beta.kubernetes.io/azure-pip-name: "auragxp-uat-redis-pip"
+        service.beta.kubernetes.io/azure-load-balancer-resource-group: "rg-auragxp-level2-uat"
+        service.beta.kubernetes.io/azure-load-balancer-internal: "false"
+        service.beta.kubernetes.io/azure-load-balancer-health-probe-protocol: "tcp"
+
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 300m
+        memory: 256Mi
+
+    extraVolumes:
+      - name: redis-secrets-store
+        csi:
+          driver: secrets-store.csi.k8s.io
+          readOnly: true
+          volumeAttributes:
+            secretProviderClass: auragxp-redis-uat-keyvault
+
+    extraVolumeMounts:
+      - name: redis-secrets-store
+        mountPath: "/mnt/secrets-store"
+        readOnly: true
+
+  # Replica configuration
+  replica:
+    replicaCount: 2
+
+    persistence:
+      enabled: true
+      size: 8Gi
+      accessModes:
+        - ReadWriteOnce
+
+    service:
+      type: ClusterIP
+      ports:
+        redis: 6379
+
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 300m
+        memory: 256Mi
+
+    extraVolumes:
+      - name: redis-secrets-store
+        csi:
+          driver: secrets-store.csi.k8s.io
+          readOnly: true
+          volumeAttributes:
+            secretProviderClass: auragxp-redis-uat-keyvault
+
+    extraVolumeMounts:
+      - name: redis-secrets-store
+        mountPath: "/mnt/secrets-store"
+        readOnly: true
+
+  # Metrics (disabled)
+  metrics:
+    enabled: false
+
+  # Sentinel (disabled)
+  sentinel:
+    enabled: false
+
+  # Cluster mode (disabled)
+  cluster:
+    enabled: false
+
+# ===================== NAMESPACE CONFIGURATION =====================
+namespace: auragxp-db-uat
+
+# ===================== NETWORK POLICY CONFIGURATION =====================
+networkPolicy:
+  enabled: true
+  name: auragxp-redis-uat-custom
+  namespace: auragxp-db-uat
+  port: 6379
+  protocol: TCP
+  
+  # Pod selector labels
+  podSelector:
+    app.kubernetes.io/instance: auragxp-redis-uat
+    app.kubernetes.io/name: redis
+  
+  # Allowed IP ranges for Function Apps and external access
+  allowedIPs:
+    - 52.233.72.160/32
+    - 52.151.57.252/32
+    - 52.175.226.60/32
+    - 52.175.255.184/32
+    - 52.151.63.62/32
+    - 20.42.128.118/32
+    - 52.229.30.210/32
+
+# ===================== CSI KEY VAULT CONFIGURATION =====================
+csiKeyVault:
+  enabled: true
+  secretProviderClassName: auragxp-redis-uat-keyvault
+  syncedK8sSecretName: auragxp-redis-uat-auth
+  
+  # Key Vault connection details
+  vaultName: kv-auragxp-uat-eus-sh
+  vaultUrl: https://kv-auragxp-uat-eus-sh.vault.azure.net/
+  tenantId: 788f6d9e-1a66-4385-9aee-01da8900e00b
+  
+  # Workload Identity details
+  clientId: e09e2815-5e84-47c7-b4e2-6070e08ae362
+  
+  # Redis specific secrets
+  objects:
+    array:
+      - objectName: REDIS-PASSWORD
+        objectType: secret
+  
+  # Secret mapping
+  secretObjects:
+    data:
+      - key: redis-password
+        objectName: REDIS-PASSWORD
+
+# ===================== HELM CHART INFO =====================
+helmChart:
+  name: redis
+  version: 25.3.2

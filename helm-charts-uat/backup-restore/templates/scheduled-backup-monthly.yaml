@@ -1,0 +1,32 @@
+{{- if .Values.monthlyBackup.enabled }}
+apiVersion: postgresql.cnpg.io/v1
+kind: ScheduledBackup
+metadata:
+  name: {{ .Values.monthlyBackup.name }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    backup-type: full
+    backup-tier: monthly
+    app: auragxp-cnpg-uat
+spec:
+  schedule: "{{ .Values.monthlyBackup.schedule }}"
+  backupOwnerReference: self
+  immediate: {{ .Values.monthlyBackup.immediate }}
+  cluster:
+    name: {{ .Values.clusterName }}
+  target: primary
+  method: barmanObjectStore
+  backup:
+    barmanObjectStore:
+      destinationPath: {{ .Values.backup.monthlyDestinationPath }}
+      azureCredentials:
+        storageAccount:
+          name: {{ .Values.backup.secretName }}
+          key: CNPG_STORAGE_ACCOUNT
+        storageKey:
+          name: {{ .Values.backup.secretName }}
+          key: CNPG_STORAGE_ACCOUNT_KEY
+      data:
+        compression: gzip
+        immediateCheckpoint: true
+{{- end }}

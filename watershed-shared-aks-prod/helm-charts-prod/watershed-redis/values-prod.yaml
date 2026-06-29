@@ -1,0 +1,118 @@
+redis:
+  networkPolicy:
+    enabled: false
+
+  architecture: replication
+
+  auth:
+    enabled: true
+    existingSecret: watershed-redis-auth
+    existingSecretPasswordKey: redis-password
+
+  master:
+    persistence:
+      enabled: true
+      size: 8Gi
+      accessModes:
+        - ReadWriteOnce
+
+    service:
+      type: LoadBalancer
+      ports:
+        redis: 6379
+      loadBalancerSourceRanges:
+        - "4.236.197.225/32"
+        - "4.236.197.242/32"
+        - "4.236.198.76/32"
+        - "4.236.198.109/32"
+        - "4.236.198.110/32"
+        - "4.236.198.141/32"
+        - "191.237.27.74/32"
+        - "40.121.16.193/32"
+        - "130.107.72.103/32"
+      annotations:
+        service.beta.kubernetes.io/azure-pip-name: "watershed-prod-redis-pip"
+        service.beta.kubernetes.io/azure-load-balancer-resource-group: "rg-watershed-level2-prod-esu"
+        service.beta.kubernetes.io/azure-load-balancer-internal: "false"
+        service.beta.kubernetes.io/azure-load-balancer-health-probe-protocol: "tcp"
+
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 300m
+        memory: 256Mi
+
+    extraVolumes:
+      - name: redis-secrets-store
+        csi:
+          driver: secrets-store.csi.k8s.io
+          readOnly: true
+          volumeAttributes:
+            secretProviderClass: watershed-redis-keyvault
+
+    extraVolumeMounts:
+      - name: redis-secrets-store
+        mountPath: "/mnt/secrets-store"
+        readOnly: true
+
+  replica:
+    replicaCount: 1
+
+    persistence:
+      enabled: true
+      size: 8Gi
+      accessModes:
+        - ReadWriteOnce
+
+    service:
+      type: ClusterIP
+      ports:
+        redis: 6379
+
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 300m
+        memory: 256Mi
+
+    extraVolumes:
+      - name: redis-secrets-store
+        csi:
+          driver: secrets-store.csi.k8s.io
+          readOnly: true
+          volumeAttributes:
+            secretProviderClass: watershed-redis-keyvault
+
+    extraVolumeMounts:
+      - name: redis-secrets-store
+        mountPath: "/mnt/secrets-store"
+        readOnly: true
+
+  metrics:
+    enabled: false
+
+  sentinel:
+    enabled: false
+
+  cluster:
+    enabled: false
+
+# ADDED: CSI Key Vault configuration
+csiKeyVault:
+  secretProviderClassName: "watershed-redis-keyvault"
+  syncedK8sSecretName: "watershed-redis-auth"
+  vaultName: "kv-watershed-esu"
+  tenantId: "788f6d9e-1a66-4385-9aee-01da8900e00b"
+  clientId: "5b2a0f44-83bf-4034-b0a9-ea002cadd130"
+  namespace: watershed-db
+  objects:
+    array:
+      - objectName: REDIS-PASSWORD
+        objectType: secret
+
+# ADDED: Namespace configuration
+namespace: watershed-db

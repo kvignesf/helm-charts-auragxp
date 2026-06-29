@@ -1,0 +1,14 @@
+Auragxp DEVINT2 CNPG deployed successfully
+
+Cluster: {{ include "auragxp-cnpg-devint2.clusterName" . }}
+Namespace: {{ include "auragxp-cnpg-devint2.namespace" . }}
+
+Check health:
+  kubectl get cluster -n {{ include "auragxp-cnpg-devint2.namespace" . }}
+  kubectl get pods -n {{ include "auragxp-cnpg-devint2.namespace" . }}
+
+Primary endpoint:
+  {{ include "auragxp-cnpg-devint2.clusterName" . }}-rw-external:5432
+
+Next:
+  Execute initial SQL setup after pods are healthy.

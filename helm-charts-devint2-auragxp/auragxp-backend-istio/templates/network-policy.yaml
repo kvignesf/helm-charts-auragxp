@@ -1,0 +1,115 @@
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Values.networkPolicy.name }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "backend.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app: {{ .Values.appName }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    {{- if .Values.networkPolicy.ingress.fromFrontend.enabled }}
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- range $key, $value := .Values.networkPolicy.ingress.fromFrontend.frontendLabelSelector }}
+              {{ $key }}: {{ $value | quote }}
+              {{- end }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.networkPolicy.ingress.fromFrontend.port }}
+    {{- end }}
+    {{- if .Values.networkPolicy.ingress.fromIstioGateway.enabled }}
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.ingress.fromIstioGateway.gatewayNamespace }}
+          podSelector:
+            matchLabels:
+              {{- range $key, $value := .Values.networkPolicy.ingress.fromIstioGateway.gatewayLabelSelector }}
+              {{ $key }}: {{ $value | quote }}
+              {{- end }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.networkPolicy.ingress.fromIstioGateway.port }}
+    {{- end }}
+  egress:
+    {{- if .Values.networkPolicy.egress.toPostgres.enabled }}
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.egress.toPostgres.postgresNamespace }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.networkPolicy.egress.toPostgres.postgresPort }}
+    {{- end }}
+    {{- if .Values.networkPolicy.egress.toRedis.enabled }}
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.egress.toRedis.redisNamespace }}
+          podSelector:
+            matchLabels:
+              {{- range $key, $value := .Values.networkPolicy.egress.toRedis.redisLabelSelector }}
+              {{ $key }}: {{ $value | quote }}
+              {{- end }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.networkPolicy.egress.toRedis.redisPort }}
+    {{- end }}
+    {{- if .Values.networkPolicy.egress.toDNS.enabled }}
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.egress.toDNS.dnsNamespace }}
+          podSelector:
+            matchLabels:
+              {{- range $key, $value := .Values.networkPolicy.egress.toDNS.dnsLabelSelector }}
+              {{ $key }}: {{ $value | quote }}
+              {{- end }}
+      ports:
+        {{- range .Values.networkPolicy.egress.toDNS.dnsPorts }}
+        - protocol: {{ .protocol }}
+          port: {{ .port }}
+        {{- end }}
+    {{- end }}
+    {{- if .Values.networkPolicy.egress.toExternalHTTPS.enabled }}
+    - to:
+        - ipBlock:
+            cidr: {{ .Values.networkPolicy.egress.toExternalHTTPS.externalCIDR }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.networkPolicy.egress.toExternalHTTPS.httpsPort }}
+    {{- end }}
+    {{- if .Values.networkPolicy.egress.toIstioControlPlane.enabled }}
+    - to:
+        {{- range .Values.networkPolicy.egress.toIstioControlPlane.istioNamespaces }}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ . }}
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.networkPolicy.egress.toIstioControlPlane.xdsPort }}
+    {{- end }}
+    {{- if .Values.networkPolicy.egress.toKeycloak.enabled }}
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.egress.toKeycloak.keycloakNamespace }}
+          podSelector:
+            matchLabels:
+              {{- range $key, $value := .Values.networkPolicy.egress.toKeycloak.keycloakLabelSelector }}
+              {{ $key }}: {{ $value | quote }}
+              {{- end }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.networkPolicy.egress.toKeycloak.keycloakPort }}
+    {{- end }}
+{{- end }}

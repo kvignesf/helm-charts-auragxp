@@ -1,0 +1,154 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: auragxp-backend
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: auragxp-backend
+
+spec:
+  replicas: {{ .Values.replicaCount }}
+
+  selector:
+    matchLabels:
+      app: auragxp-backend
+
+  template:
+    metadata:
+      labels:
+        app: auragxp-backend
+      annotations:
+        proxy.istio.io/config: '{ "holdApplicationUntilProxyStarts": true }'
+        {{- toYaml .Values.podAnnotations | nindent 8 }}
+
+    spec:
+      serviceAccountName: externalsecretoperator-serviceaccount
+
+      strategy:
+        type: RollingUpdate
+        rollingUpdate:
+          maxSurge: 1
+          maxUnavailable: 0
+
+      # ===== ADDED: Anti-affinity for high availability =====
+      affinity:
+        # Prevent pods from scheduling on same node
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - auragxp-backend
+              topologyKey: kubernetes.io/hostname
+
+        # Spread pods across nodes evenly
+        podAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 50
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - auragxp-backend
+              topologyKey: topology.kubernetes.io/zone
+
+      # ===== ADDED: Topology spread constraints =====
+      topologySpreadConstraints:
+      - maxSkew: 1
+        topologyKey: kubernetes.io/hostname
+        whenUnsatisfiable: ScheduleAnyway
+        labelSelector:
+          matchLabels:
+            app: auragxp-backend
+      - maxSkew: 1
+        topologyKey: topology.kubernetes.io/zone
+        whenUnsatisfiable: ScheduleAnyway
+        labelSelector:
+          matchLabels:
+            app: auragxp-backend
+
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+
+      containers:
+        - name: auragxp-backend
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.port }}
+
+          env:
+            - name: NODE_ENV
+              value: "prod"
+
+            - name: DB_HOST
+              value: "auragxp-db-cluster-rw.auragxp-db.svc.cluster.local"
+
+            - name: DB_PORT
+              value: "5432"
+
+            - name: REDIS_HOST
+              value: "auragxp-redis-master.auragxp-db.svc.cluster.local"
+
+            - name: REDIS_PORT
+              value: "6379"
+
+          envFrom:
+            - secretRef:
+                name: {{ .Values.csiKeyVault.syncedK8sSecretName }}
+
+          volumeMounts:
+            - name: secrets-store-inline
+              mountPath: /mnt/secret
+              readOnly: true
+
+          # ===== UPDATED: Resources based on actual usage =====
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+
+          # ===== IMPROVED: Probes with better settings =====
+          livenessProbe:
+            tcpSocket:
+              port: {{ .Values.service.port }}
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+
+          readinessProbe:
+            tcpSocket:
+              port: {{ .Values.service.port }}
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            successThreshold: 1
+            failureThreshold: 3
+
+          # ===== ADDED: Startup probe for slow-starting apps =====
+          startupProbe:
+            tcpSocket:
+              port: {{ .Values.service.port }}
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            failureThreshold: 30
+
+      volumes:
+        - name: secrets-store-inline
+          csi:
+            driver: secrets-store.csi.k8s.io
+            readOnly: true
+            volumeAttributes:
+              secretProviderClass: {{ .Values.csiKeyVault.secretProviderClassName }}
+
+      # ===== ADDED: Termination grace period for clean shutdown =====
+      terminationGracePeriodSeconds: 60

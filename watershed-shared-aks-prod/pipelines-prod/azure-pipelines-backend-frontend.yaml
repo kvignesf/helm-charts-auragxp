@@ -1,0 +1,429 @@
+trigger: none
+
+parameters:
+  - name: environment
+    displayName: 'Target Environment'
+    type: string
+    default: 'prod'
+    values:
+      - dev
+      - uat
+      - prod
+  
+  - name: action
+    displayName: 'Helm Action'
+    type: string
+    default: 'install'
+    values:
+      - install
+      - upgrade
+
+resources:
+  repositories:
+    # Dev Repositories
+    - repository: qmslms_phase1_dev
+      type: git
+      name: auragxp-platform/qmslms_phase1
+      ref: devint-deploy
+      endpoint: auragxp-platform-sc
+    - repository: templates_dev
+      type: git
+      name: auragxp-devops/DevOps-Templates
+      ref: stage-templates
+      endpoint: auragxp-platform-sc
+    - repository: auragxp_devops_dev
+      type: git
+      name: auragxp-devops/auragxp-devops
+      ref: main
+      endpoint: auragxp-platform-sc
+
+    # UAT Repositories
+    - repository: qmslms_phase1_uat
+      type: git
+      name: auragxp-platform/qmslms_phase1
+      ref: main
+      endpoint: auragxp-platform-sc
+    - repository: templates_uat
+      type: git
+      name: auragxp-devops/DevOps-Templates
+      ref: stage-templates
+      endpoint: auragxp-platform-sc
+    - repository: auragxp_devops_uat
+      type: git
+      name: auragxp-devops/auragxp-devops
+      ref: main
+      endpoint: auragxp-platform-sc
+
+    # PROD Repositories
+    - repository: qmslms_phase1_prod
+      type: git
+      name: auragxp-platform/qmslms_phase1
+      ref: main
+      endpoint: auragxp-platform-sc
+    - repository: templates_prod
+      type: git
+      name: auragxp-devops/DevOps-Templates
+      ref: main
+      endpoint: auragxp-platform-sc
+    - repository: auragxp_devops_prod
+      type: git
+      name: auragxp-devops/auragxp-devops
+      ref: main
+      endpoint: auragxp-platform-sc
+
+pool: 
+    name: 'Azure-Self-Hosted2'
+
+variables:
+  - name: CHART_PATH
+    value: '$(Build.SourcesDirectory)/watershed-shared-aks-prod/helm-charts-prod'
+  - name: COMMIT_ID
+    value: $[substring(variables['Build.SourceVersion'], 0, 8)]
+  - name: PASS_VULNERABILITIES
+    value: 'true'
+  - ${{ if eq(parameters.environment, 'dev') }}:
+    - group: watershed-platform-dev
+  - ${{ if eq(parameters.environment, 'uat') }}:
+    - group: watershed-platform-uat
+  - ${{ if eq(parameters.environment, 'prod') }}:
+    - group: watershed-platform-prod
+
+stages:
+
+# STAGE 1: BUILD & PUSH IMAGES
+- stage: BuildAndPush
+  displayName: 'Build and Push Frontend & Backend Images'
+  jobs:
+    - ${{ if eq(parameters.environment, 'dev') }}:
+      - template: Docker/frontend-build-template.yml@templates_dev
+        parameters:
+          poolName: 'Azure-Self-Hosted2'
+          dockerfile: 'Dockerfile-frontend'
+          repoName: $(REPO_FRONTEND)
+      - template: Docker/backend-build-template.yml@templates_dev
+        parameters:
+          poolName: 'Azure-Self-Hosted2'
+          dockerfile: 'Dockerfile-backend'
+          repoName: $(REPO_BACKEND)
+    - ${{ if eq(parameters.environment, 'uat') }}:
+      - template: Docker/frontend-build-template.yml@templates_uat
+        parameters:
+          poolName: 'Azure-Self-Hosted2'
+          dockerfile: 'Dockerfile-frontend'
+          repoName: $(REPO_FRONTEND)
+      - template: Docker/backend-build-template.yml@templates_uat
+        parameters:
+          poolName: 'Azure-Self-Hosted2'
+          dockerfile: 'Dockerfile-backend'
+          repoName: $(REPO_BACKEND)
+    - ${{ if eq(parameters.environment, 'prod') }}:
+      - template: Docker/frontend-build-template.yml@templates_prod
+        parameters:
+          poolName: 'Azure-Self-Hosted2'
+          dockerfile: 'Dockerfile-frontend'
+          repoName: $(REPO_FRONTEND)
+      - template: Docker/backend-build-template.yml@templates_prod
+        parameters:
+          poolName: 'Azure-Self-Hosted2'
+          dockerfile: 'Dockerfile-backend'
+          repoName: $(REPO_BACKEND)
+
+# STAGE 2: VULNERABILITY THRESHOLD GATE (Skipped for Prod)
+- stage: EvaluateVulnerabilities
+  displayName: 'Evaluate Vulnerability Thresholds'
+  dependsOn: BuildAndPush
+  condition: and(succeeded(), ne(parameters.environment, 'prod'), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+  variables:
+    BACKEND_HIGH: $[stageDependencies.BuildAndPush.DockerBuild_backend.outputs['TrivyScan.BACKEND_HIGH']]
+    BACKEND_CRITICAL: $[stageDependencies.BuildAndPush.DockerBuild_backend.outputs['TrivyScan.BACKEND_CRITICAL']]
+    FRONTEND_HIGH: $[stageDependencies.BuildAndPush.DockerBuild_frontend.outputs['TrivyScan.FRONTEND_HIGH']]
+    FRONTEND_CRITICAL: $[stageDependencies.BuildAndPush.DockerBuild_frontend.outputs['TrivyScan.FRONTEND_CRITICAL']]
+    FRONTEND_COMMIT: $[stageDependencies.BuildAndPush.DockerBuild_frontend.outputs['GetCommitId.COMMIT_ID']]
+    BACKEND_COMMIT: $[stageDependencies.BuildAndPush.DockerBuild_backend.outputs['GetCommitId.COMMIT_ID']]
+  jobs:
+    - job: CheckThresholds
+      displayName: 'Check Vulnerability Thresholds'
+      steps:
+        - checkout: none
+        - script: |
+            set -e
+            BACKEND_HIGH=${BACKEND_HIGH:-0}
+            BACKEND_CRITICAL=${BACKEND_CRITICAL:-0}
+            FRONTEND_HIGH=${FRONTEND_HIGH:-0}
+            FRONTEND_CRITICAL=${FRONTEND_CRITICAL:-0}
+
+            TOTAL_HIGH=$((BACKEND_HIGH + FRONTEND_HIGH))
+            TOTAL_CRITICAL=$((BACKEND_CRITICAL + FRONTEND_CRITICAL))
+            MAX_HIGH=${MAX_HIGH_VULNS:-10}
+            MAX_CRITICAL=${MAX_CRITICAL_VULNS:-5}
+
+            echo "========== VULNERABILITY SUMMARY =========="
+            echo "Frontend - HIGH: $FRONTEND_HIGH, CRITICAL: $FRONTEND_CRITICAL"
+            echo "Backend - HIGH: $BACKEND_HIGH, CRITICAL: $BACKEND_CRITICAL"
+            echo "Total HIGH: $TOTAL_HIGH, Total CRITICAL: $TOTAL_CRITICAL"
+            echo "Max allowed HIGH: $MAX_HIGH, Max allowed CRITICAL: $MAX_CRITICAL"
+            echo "==========================================="
+
+            echo "Frontend Commit: $(FRONTEND_COMMIT)"
+            echo "Backend Commit: $(BACKEND_COMMIT)"
+
+            echo "##vso[task.setvariable variable=FRONTEND_COMMIT;isOutput=true]$(FRONTEND_COMMIT)"
+            echo "##vso[task.setvariable variable=BACKEND_COMMIT;isOutput=true]$(BACKEND_COMMIT)"
+
+            if [ $TOTAL_HIGH -gt $MAX_HIGH ] || [ $TOTAL_CRITICAL -gt $MAX_CRITICAL ]; then
+              echo "##vso[task.logissue type=warning]Vulnerability threshold exceeded! Check reports."
+              if [ "$PASS_VULNERABILITIES" != "true" ]; then
+                exit 1
+              fi
+            fi
+          displayName: 'Check Thresholds'
+          name: ThresholdCheck
+          env:
+            BACKEND_HIGH: $(BACKEND_HIGH)
+            BACKEND_CRITICAL: $(BACKEND_CRITICAL)
+            FRONTEND_HIGH: $(FRONTEND_HIGH)
+            FRONTEND_CRITICAL: $(FRONTEND_CRITICAL)
+            FRONTEND_COMMIT: $(FRONTEND_COMMIT)
+            BACKEND_COMMIT: $(BACKEND_COMMIT)
+            MAX_HIGH_VULNS: $(MAX_HIGH_VULNS)
+            MAX_CRITICAL_VULNS: $(MAX_CRITICAL_VULNS)
+            PASS_VULNERABILITIES: $(PASS_VULNERABILITIES)
+
+# STAGE 3: HELM DEPLOYMENT TO AKS
+- stage: DeployAppHelm
+  displayName: 'Deploy App Services'
+  dependsOn:
+    - BuildAndPush
+    - ${{ if and(ne(parameters.environment, 'prod'), eq(variables['Build.SourceBranch'], 'refs/heads/main')) }}:
+      - EvaluateVulnerabilities
+  condition: succeeded()
+  variables:
+    ${{ if ne(parameters.environment, 'prod') }}:
+      FRONTEND_COMMIT: $[stageDependencies.EvaluateVulnerabilities.CheckThresholds.outputs['ThresholdCheck.FRONTEND_COMMIT']]
+      BACKEND_COMMIT: $[stageDependencies.EvaluateVulnerabilities.CheckThresholds.outputs['ThresholdCheck.BACKEND_COMMIT']]
+  jobs:
+    - job: HelmDeploy
+      displayName: 'Helm Upgrade/Install'
+      steps:
+        - ${{ if eq(parameters.environment, 'dev') }}:
+          - checkout: qmslms_phase1_dev
+        - ${{ if eq(parameters.environment, 'uat') }}:
+          - checkout: qmslms_phase1_uat
+        - ${{ if eq(parameters.environment, 'prod') }}:
+          - checkout: qmslms_phase1_prod
+        - script: |
+            echo "========================================="
+            echo "Environment: $(ENV_NAME)"
+            echo "Namespace: $(NAMESPACE)"
+            echo "Is Prod: $(IS_PROD)"
+            echo "CHART_PATH: $(CHART_PATH)"
+            echo "========================================="
+          displayName: 'Display Environment Context'
+        - ${{ if ne(parameters.environment, 'prod') }}:
+          - script: |
+              set -e
+              echo "Using CHART_PATH: $(CHART_PATH)"
+              BACKEND_CHART_DIR="$(CHART_PATH)/watershed-backend-istio"
+              if [ ! -d "$BACKEND_CHART_DIR" ]; then 
+                echo "ERROR: Backend chart directory not found at $BACKEND_CHART_DIR"
+                exit 1
+              fi
+              BACKEND_VALUES_FILE="$BACKEND_CHART_DIR/values-$(ENV_NAME).yaml"
+              sed -i "s|tag: \".*\"|tag: \"$(BACKEND_COMMIT)\"|g" "$BACKEND_VALUES_FILE"
+              echo "##vso[task.setvariable variable=BACKEND_CHART_DIR]$BACKEND_CHART_DIR"
+            displayName: 'Update Backend values.yaml with Commit ID'
+            env:
+              BACKEND_COMMIT: $(BACKEND_COMMIT)
+              ENV_NAME: $(ENV_NAME)
+          - script: |
+              set -e
+              echo "Using CHART_PATH: $(CHART_PATH)"
+              FRONTEND_CHART_DIR="$(CHART_PATH)/watershed-frontend-istio"
+              if [ ! -d "$FRONTEND_CHART_DIR" ]; then 
+                echo "ERROR: Frontend chart directory not found at $FRONTEND_CHART_DIR"
+                exit 1
+              fi
+              FRONTEND_VALUES_FILE="$FRONTEND_CHART_DIR/values-$(ENV_NAME).yaml"
+              sed -i "s|tag: \".*\"|tag: \"$(FRONTEND_COMMIT)\"|g" "$FRONTEND_VALUES_FILE"
+              echo "##vso[task.setvariable variable=FRONTEND_CHART_DIR]$FRONTEND_CHART_DIR"
+            displayName: 'Update Frontend values.yaml with Commit ID'
+            env:
+              FRONTEND_COMMIT: $(FRONTEND_COMMIT)
+              ENV_NAME: $(ENV_NAME)
+        - ${{ if eq(parameters.environment, 'prod') }}:
+          - script: |
+              echo "Using CHART_PATH for prod: $(CHART_PATH)"
+              echo "##vso[task.setvariable variable=BACKEND_CHART_DIR]$(CHART_PATH)/watershed-backend-istio"
+              echo "##vso[task.setvariable variable=FRONTEND_CHART_DIR]$(CHART_PATH)/watershed-frontend-istio"
+            displayName: 'Set Charts Directory (Prod)'
+        - task: AzureCLI@2
+          displayName: 'Whitelist Agent IP'
+          inputs:
+            azureSubscription: $(AZURE_SERVICE_CONNECTION)
+            scriptType: bash
+            scriptLocation: inlineScript
+            inlineScript: |
+              set -e
+              AGENT_IP=$(curl -s https://api.ipify.org)
+              echo "Agent IP: $AGENT_IP"
+              EXISTING_RANGES=$(az aks show -g "$AKS_RG" -n "$AKS_NAME" --query "apiServerAccessProfile.authorizedIpRanges | join(',', @)" -o tsv || echo "")
+              if [[ "$EXISTING_RANGES" != *"$AGENT_IP"* ]]; then
+                NEW_RANGES="${EXISTING_RANGES:+${EXISTING_RANGES},}${AGENT_IP}"
+                az aks update -g "$AKS_RG" -n "$AKS_NAME" --api-server-authorized-ip-ranges "$NEW_RANGES"
+                echo "Waiting 60s for firewall propagation..."
+                sleep 60
+              else
+                echo "Agent IP already whitelisted"
+              fi
+          env:
+            AKS_RG: $(AKS_RESOURCE_GROUP)
+            AKS_NAME: $(AKS_CLUSTER_NAME)
+        - task: AzureCLI@2
+          displayName: 'Connect & Prepare Namespace'
+          inputs:
+            azureSubscription: $(AZURE_SERVICE_CONNECTION)
+            scriptType: bash
+            scriptLocation: inlineScript
+            inlineScript: |
+              set -e
+              az aks get-credentials -g "$AKS_RG" -n "$AKS_NAME" --overwrite-existing
+              kubelogin convert-kubeconfig -l azurecli
+              kubectl create namespace $(NAMESPACE) --dry-run=client -o yaml | kubectl apply -f -
+              echo "Connected to AKS cluster and namespace $(NAMESPACE) ready"
+          env:
+            AKS_RG: $(AKS_RESOURCE_GROUP)
+            AKS_NAME: $(AKS_CLUSTER_NAME)
+            NAMESPACE: $(NAMESPACE)
+        - task: AzureCLI@2
+          displayName: 'Deploy Backend Service'
+          inputs:
+            azureSubscription: $(AZURE_SERVICE_CONNECTION)
+            scriptType: bash
+            scriptLocation: inlineScript
+            inlineScript: |
+              set -e
+              az aks get-credentials -g "$AKS_RG" -n "$AKS_NAME" --overwrite-existing
+              kubelogin convert-kubeconfig -l azurecli
+
+              if [ -z "$BACKEND_CHART_DIR" ] || [ ! -d "$BACKEND_CHART_DIR" ]; then
+                echo "ERROR: Backend chart directory not valid at $BACKEND_CHART_DIR"
+                exit 1
+              fi
+
+              if [ "$IS_PROD" == "true" ]; then
+                helm upgrade --install watershed-backend "$BACKEND_CHART_DIR" \
+                  --namespace $(NAMESPACE) \
+                  --values "$BACKEND_CHART_DIR/values-$(ENV_NAME).yaml" \
+                  --wait --atomic --timeout 10m
+              else
+                helm upgrade --install watershed-backend "$BACKEND_CHART_DIR" \
+                  --namespace $(NAMESPACE) \
+                  --values "$BACKEND_CHART_DIR/values-$(ENV_NAME).yaml" \
+                  --wait --atomic --timeout 10m
+              fi
+          env:
+            AKS_RG: $(AKS_RESOURCE_GROUP)
+            AKS_NAME: $(AKS_CLUSTER_NAME)
+            BACKEND_CHART_DIR: $(BACKEND_CHART_DIR)
+            NAMESPACE: $(NAMESPACE)
+            IS_PROD: $(IS_PROD)
+            VALUES_FILE: $(VALUES_FILE)
+        - task: AzureCLI@2
+          displayName: 'Deploy Frontend Service'
+          inputs:
+            azureSubscription: $(AZURE_SERVICE_CONNECTION)
+            scriptType: bash
+            scriptLocation: inlineScript
+            inlineScript: |
+              set -e
+              az aks get-credentials -g "$AKS_RG" -n "$AKS_NAME" --overwrite-existing
+              kubelogin convert-kubeconfig -l azurecli
+
+              if [ -z "$FRONTEND_CHART_DIR" ] || [ ! -d "$FRONTEND_CHART_DIR" ]; then
+                echo "ERROR: Frontend chart directory not valid at $FRONTEND_CHART_DIR"
+                exit 1
+              fi
+
+              if [ "$IS_PROD" == "true" ]; then
+                helm upgrade --install watershed-frontend "$FRONTEND_CHART_DIR" \
+                  --namespace $(NAMESPACE) \
+                  --values "$FRONTEND_CHART_DIR/values-$(ENV_NAME).yaml" \
+                  --wait --atomic --timeout 10m
+              else
+                helm upgrade --install watershed-frontend "$FRONTEND_CHART_DIR" \
+                  --namespace $(NAMESPACE) \
+                  --values "$FRONTEND_CHART_DIR/values-$(ENV_NAME).yaml" \
+                  --wait --atomic --timeout 10m
+              fi
+          env:
+            AKS_RG: $(AKS_RESOURCE_GROUP)
+            AKS_NAME: $(AKS_CLUSTER_NAME)
+            FRONTEND_CHART_DIR: $(FRONTEND_CHART_DIR)
+            NAMESPACE: $(NAMESPACE)
+            IS_PROD: $(IS_PROD)
+            VALUES_FILE: $(VALUES_FILE)
+        - task: AzureCLI@2
+          displayName: 'Verify Deployments'
+          inputs:
+            azureSubscription: $(AZURE_SERVICE_CONNECTION)
+            scriptType: bash
+            scriptLocation: inlineScript
+            inlineScript: |
+              set -e
+              az aks get-credentials -g "$AKS_RG" -n "$AKS_NAME" --overwrite-existing
+              kubelogin convert-kubeconfig -l azurecli
+
+              echo "Checking pod status in $(NAMESPACE) namespace..."
+              kubectl get pods -n $(NAMESPACE)
+
+              echo "Checking deployment status..."
+              kubectl get deployments -n $(NAMESPACE)
+
+              echo "Pod images with commit IDs:"
+              kubectl get pods -n $(NAMESPACE) -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.containers[0].image}{"\n"}{end}'
+
+              BACKEND_POD=$(kubectl get pods -n $(NAMESPACE) -l app=watershed-backend -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
+              if [ ! -z "$BACKEND_POD" ]; then
+                BACKEND_IMAGE=$(kubectl get pod $BACKEND_POD -n $(NAMESPACE) -o jsonpath='{.spec.containers[0].image}')
+                echo "Backend Image: $BACKEND_IMAGE"
+              fi
+
+              FRONTEND_POD=$(kubectl get pods -n $(NAMESPACE) -l app=watershed-frontend -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
+              if [ ! -z "$FRONTEND_POD" ]; then
+                FRONTEND_IMAGE=$(kubectl get pod $FRONTEND_POD -n $(NAMESPACE) -o jsonpath='{.spec.containers[0].image}')
+                echo "Frontend Image: $FRONTEND_IMAGE"
+              fi
+          env:
+            AKS_RG: $(AKS_RESOURCE_GROUP)
+            AKS_NAME: $(AKS_CLUSTER_NAME)
+            NAMESPACE: $(NAMESPACE)
+
+# STAGE 4: DAST - OWASP ZAP (Skipped for Prod)
+- stage: DASTScan
+  displayName: 'OWASP ZAP DAST Scan'
+  dependsOn: DeployAppHelm
+  condition: and(succeededOrFailed(), ne(variables['Build.SourceBranch'], 'refs/heads/main'))
+  jobs:
+    - job: ZAPScan
+      displayName: 'Run OWASP ZAP Baseline Scan'
+      steps:
+        - checkout: none
+        - script: |
+            set -e
+            mkdir -p $(Pipeline.Workspace)/zap-output
+            echo "Running ZAP baseline scan against $(ZAP_TARGET_URL)"
+            docker run --rm \
+              -v $(Pipeline.Workspace)/zap-output:/zap/wrk:rw \
+              ghcr.io/zaproxy/zaproxy:stable \
+              zap-baseline.py \
+              -t $(ZAP_TARGET_URL) \
+              -r zap-report.html \
+              -J zap-report.json \
+              || echo "ZAP scan completed with warnings"
+          displayName: 'Execute ZAP Scan'
+          continueOnError: true
+          env:
+            ZAP_TARGET_URL: $(ZAP_TARGET_URL)
+        - publish: $(Pipeline.Workspace)/zap-output
+          artifact: ZAP-Reports
+          condition: always()

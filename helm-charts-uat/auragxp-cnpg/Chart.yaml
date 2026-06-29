@@ -1,0 +1,7 @@
+apiVersion: v2
+name: auragxp-cnpg-uat
+description: Helm chart for deploying Auragxp CloudNative PostgreSQL Database
+type: application
+version: 0.1.0
+appVersion: "1.22.0"
+

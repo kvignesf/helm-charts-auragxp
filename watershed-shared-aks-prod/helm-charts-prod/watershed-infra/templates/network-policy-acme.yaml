@@ -1,0 +1,15 @@
+{{- if .Values.networkPolicy.acmeEnabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Values.networkPolicy.acmeName }}
+  namespace: {{ .Values.namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      {{ .Values.networkPolicy.acmeLabel }}: {{ .Values.networkPolicy.acmeLabelValue | quote }}
+  policyTypes:
+  - Ingress
+  ingress:
+  - {}
+{{- end }}

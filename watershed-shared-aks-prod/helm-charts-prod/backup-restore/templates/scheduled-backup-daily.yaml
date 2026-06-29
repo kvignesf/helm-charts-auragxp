@@ -1,0 +1,31 @@
+{{- if .Values.dailyBackup.enabled }}
+apiVersion: postgresql.cnpg.io/v1
+kind: ScheduledBackup
+metadata:
+  name: {{ .Values.dailyBackup.name }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    backup-type: incremental
+    backup-tier: daily
+    app: watershed-cnpg
+spec:
+  schedule: "{{ .Values.dailyBackup.schedule }}"
+  backupOwnerReference: self
+  cluster:
+    name: {{ .Values.clusterName }}
+  target: primary
+  method: barmanObjectStore
+  backup:
+    barmanObjectStore:
+      destinationPath: {{ .Values.backup.dailyDestinationPath }}
+      azureCredentials:
+        storageAccount:
+          name: {{ .Values.backup.secretName }}
+          key: CNPG_STORAGE_ACCOUNT
+        storageKey:
+          name: {{ .Values.backup.secretName }}
+          key: CNPG_STORAGE_ACCOUNT_KEY
+      data:
+        compression: gzip
+        immediateCheckpoint: false
+{{- end }}

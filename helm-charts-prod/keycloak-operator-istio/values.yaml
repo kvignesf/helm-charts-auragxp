@@ -1,0 +1,80 @@
+namespace: auragxp-keycloak
+
+keycloak:
+  replicas: 2
+  hostname: auragxp.auratrace.ai
+  http:
+    enabled: true
+  image: quay.io/keycloak/keycloak:26.4.7
+  
+  # MOVE RESOURCES HERE (under keycloak)
+  resources:
+    requests:
+      cpu: 250m
+      memory: 768Mi
+    limits:
+      cpu: 1000m
+      memory: 1536Mi
+
+  db:
+    host: auragxp-db-cluster-rw.auragxp-db.svc.cluster.local
+    port: 5432
+    database: aura_trace_kc_db
+    usernameSecret: kv-auraprod-esu
+    passwordSecret: kv-auraprod-esu
+
+podAnnotations:
+  sidecar.istio.io/inject: "false"
+
+istio:
+  gatewayName: auragxp-istio-gateway
+  virtualServiceName: auragxp-main-vs
+
+csi:
+  clientId: "5b2a0f44-83bf-4034-b0a9-ea002cadd130"
+  tenantId: "788f6d9e-1a66-4385-9aee-01da8900e00b"
+  vaultName: "kv-auraprod-esu"
+  secretName: kv-auraprod-esu
+  keyMappings:
+    dbUsername: KC_DB_USERNAME
+    dbPassword: KC_DB_PASSWORD
+    adminUsername: KEYCLOAK_ADMIN
+    adminPassword: KEYCLOAK_ADMIN_PASSWORD
+
+# REMOVE these top-level resources (they're now under keycloak)
+# resources:
+#   requests:
+#     cpu: 250m
+#     memory: 768Mi
+#   limits:
+#     cpu: 1000m
+#     memory: 1536Mi
+
+
+certificate:
+  enabled: true
+  secretName: keycloak-tls
+  dnsNames:
+    - auragxp.auratrace.ai
+  issuerRef:
+    name: letsencrypt-prod
+    kind: ClusterIssuer
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 3
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 70
+
+podAntiAffinity:
+  enabled: true
+  requiredDuringScheduling: true
+
+frontend:
+  host: auragxp-frontend
+  port: 3000
+
+backend:
+  host: auragxp-backend
+  port: 3901

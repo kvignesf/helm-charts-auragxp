@@ -1,0 +1,126 @@
+# Namespace Configuration
+namespace: auragxp-prod
+
+# Service Account Configuration
+serviceAccount:
+  create: true
+  name: externalsecretoperator-serviceaccount
+  clientId: 5b2a0f44-83bf-4034-b0a9-ea002cadd130
+  tenantId: 788f6d9e-1a66-4385-9aee-01da8900e00b
+
+# Istio
+istio:
+  gatewayName: auragxp-istio-gateway
+  hostname: auragxp.auratrace.ai
+  tlsSecretName: auragxp.auratrace.ai-tls-secret
+
+# Network Policy
+networkPolicy:
+  enabled: true
+  defaultDenyName: default-deny-all
+  dnsName: allow-dns
+  acmeEnabled: true
+  acmeName: "allow-acme-challenge"
+  istioNamespace: "aks-istio-ingress"
+  keycloakOperatorName: "allow-keycloak-operator"
+  keycloakDbAccessName: "allow-keycloak-db-access"
+  keycloakDnsName: "allow-keycloak-dns"
+
+# ============ ADD THIS NEW SECTION ============
+# CSI Driver Configuration for Azure Key Vault
+csiKeyVault:
+  enabled: true
+  secretProviderClassName: "auragxp-azure-keyvault-prod"
+  syncedK8sSecretName: "kv-auraprod-esu"
+  
+  # Key Vault connection details
+  vaultName: "kv-auraprod-esu"
+  vaultUrl: "https://kv-auraprod-esu.vault.azure.net/"
+  tenantId: "788f6d9e-1a66-4385-9aee-01da8900e00b"
+  
+  # Workload Identity details
+  clientId: "5b2a0f44-83bf-4034-b0a9-ea002cadd130"
+  
+  # ALL secrets from your inventory (35+ secrets)
+  objects:
+    array:
+      - objectName: "PORT"
+        objectType: secret
+      - objectName: "SP-ENV"
+        objectType: secret
+      - objectName: "DB-HOST"
+        objectType: secret
+      - objectName: "DB-PORT"
+        objectType: secret
+      - objectName: "DB-USER"
+        objectType: secret
+      - objectName: "DB-PASSWORD"
+        objectType: secret
+      - objectName: "DB-NAME"
+        objectType: secret
+      - objectName: "AZURE-TENANT-ID"
+        objectType: secret
+      - objectName: "AZURE-CLIENT-ID"
+        objectType: secret
+      - objectName: "AZURE-CLIENT-SECRET"
+        objectType: secret
+      - objectName: "AZURE-STORAGE-CONNECTION-STRING"
+        objectType: secret
+      - objectName: "SHAREPOINT-SITE-ID"
+        objectType: secret
+      - objectName: "SHAREPOINT-DRIVE-ID"
+        objectType: secret
+      - objectName: "BACKEND-KEYCLOAK-ISSUER"
+        objectType: secret
+      - objectName: "BACKEND-KEYCLOAK-CLIENT-ID"
+        objectType: secret
+      - objectName: "BACKEND-KEYCLOAK-CLIENT-SECRET"
+        objectType: secret
+      - objectName: "BACKEND-KEYCLOAK-REDIRECT-URI"
+        objectType: secret
+      - objectName: "BACKEND-KEYCLOAK-ADMIN-CLIENT-ID"
+        objectType: secret
+      - objectName: "BACKEND-KEYCLOAK-ADMIN-CLIENT-SECRET"
+        objectType: secret
+      - objectName: "BACKEND-KC-BASE-URL"
+        objectType: secret
+      - objectName: "BACKEND-KEYCLOAK-REALM"
+        objectType: secret
+      - objectName: "BACKEND-KEYCLOAK-AUDIENCE"
+        objectType: secret
+      - objectName: "BACKEND-KEYCLOAK-JWKS"
+        objectType: secret
+      - objectName: "LICENSE-SERVER-URL"
+        objectType: secret
+      - objectName: "LICENSE-CLIENT-ID"
+        objectType: secret
+      - objectName: "LICENSE-CLIENT-SECRET"
+        objectType: secret
+      - objectName: "KEYCLOAK-ADMIN"
+        objectType: secret
+      - objectName: "KEYCLOAK-ADMIN-PASSWORD"
+        objectType: secret
+      - objectName: "KC-DB-USERNAME"
+        objectType: secret
+      - objectName: "KC-DB-PASSWORD"
+        objectType: secret
+      - objectName: "COMMUNICATION-SERVICES-CONNECTION-STRING"
+        objectType: secret
+      - objectName: "ACS-SENDER-ADDRESS"
+        objectType: secret
+      - objectName: "DEV-URL"
+        objectType: secret
+      - objectName: "NEXTAUTH-URL"
+        objectType: secret
+      - objectName: "NEXTAUTH-SECRET"
+        objectType: secret
+      - objectName: "POSTGRES-ADMIN-USER"
+        objectType: secret
+      - objectName: "REDIS-PASSWORD"
+        objectType: secret
+      - objectName: "ORG-PROVISION-FUNCTION-URL"
+        objectType: secret
+      - objectName: "ORG-SCHEMA-VERSION"
+        objectType: secret
+      - objectName: "TEMP-PASSWORD"
+        objectType: secret

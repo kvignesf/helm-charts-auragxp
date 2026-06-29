@@ -1,0 +1,36 @@
+namespace: auragxp-db-uat
+clusterName: auragxp-db-uat-cluster
+
+backup:
+  dailyDestinationPath: "https://sabackendwus.blob.core.windows.net/cnpg-daily-auragxp-uat"
+  weeklyDestinationPath: "https://sabackendwus.blob.core.windows.net/cnpg-weekly"
+  monthlyDestinationPath: "https://sabackendwus.blob.core.windows.net/cnpg-monthly"
+  secretName: auragxp-cnpg-uat-admin-secret
+  storageAccount: sabackendwus
+  retentionPolicy: "30d"
+
+dailyBackup:
+  enabled: true
+  name: auragxp-daily-backup
+  schedule: "0 0 2 * * *"
+
+weeklyBackup:
+  enabled: true
+  name: auragxp-weekly-backup
+  schedule: "0 0 1 * * 0"
+  immediate: true
+
+monthlyBackup:
+  enabled: true
+  name: auragxp-monthly-backup
+  schedule: "0 0 1 1 * *"
+  immediate: false
+
+monitoring:
+  enabled: true
+  alertFor: "5m"
+  severity: "warning"
+
+networkPolicy:
+  enabled: true
+  allowAzureEgress: true

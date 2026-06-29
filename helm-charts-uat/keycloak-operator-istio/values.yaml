@@ -1,0 +1,241 @@
+# Namespace Configuration
+namespace: auragxp-keycloak-uat
+
+# Keycloak Configuration
+keycloak:
+  replicas: 2
+  hostname: auragxp-uat.auratrace.ai
+  http:
+    enabled: true
+    port: 8080
+    httpsPort: 8443
+  managementPort: 9000
+  image: quay.io/keycloak/keycloak:26.4.7
+  startOptimized: false
+  relativePath: /keycloak
+  
+  # JVM Settings
+  jvm:
+    metaspaceSize: 96M
+    maxMetaspaceSize: 256m
+  
+  # Resources
+  resources:
+    requests:
+      cpu: 250m
+      memory: 768Mi
+      ephemeralStorage: 1Gi
+    limits:
+      cpu: 1000m
+      memory: 1536Mi
+      ephemeralStorage: 2Gi
+  
+  # Database Configuration
+  db:
+    vendor: postgres
+    host: auragxp-db-uat-cluster-rw.auragxp-db-uat.svc.cluster.local
+    port: 5432
+    database: aura_qpos_kc_db
+    usernameSecret: kv-auragxp-uat-eus-sh
+    passwordSecret: kv-auragxp-uat-eus-sh
+    pool:
+      initialSize: 5
+      minSize: 5
+      maxSize: 20
+      acquireTimeout: 30
+  
+  # Features
+  features:
+    enabled:
+      - token-exchange
+      - admin-fine-grained-authz
+    disabled: []
+  
+  # Cache Settings
+  cache:
+    type: ispn
+    clusterPort: 7800
+    fdSocketPort: 57800
+  
+  # Proxy Settings
+  proxy:
+    mode: edge
+    headers: xforwarded
+
+# Pod Annotations
+podAnnotations:
+  sidecar.istio.io/inject: "false"
+  prometheus.io/scrape: "true"
+  prometheus.io/port: "8080"
+  prometheus.io/path: "/metrics"
+
+# CSI Configuration
+csi:
+  enabled: true
+  clientId: "e09e2815-5e84-47c7-b4e2-6070e08ae362"
+  tenantId: "788f6d9e-1a66-4385-9aee-01da8900e00b"
+  vaultName: "kv-auragxp-uat-eus-sh"
+  secretName: kv-auragxp-uat-eus-sh
+  secretProviderClassName: "{{ .Release.Name }}-kv-uat"
+  keyMappings:
+    dbUsername: KC_DB_USERNAME
+    dbPassword: KC_DB_PASSWORD
+    adminUsername: KEYCLOAK_ADMIN
+    adminPassword: KEYCLOAK_ADMIN_PASSWORD
+  
+  # Key Vault Object Names
+  objects:
+    array:
+      - objectName: KC-DB-USERNAME
+        objectType: secret
+      - objectName: KC-DB-PASSWORD
+        objectType: secret
+      - objectName: KEYCLOAK-ADMIN
+        objectType: secret
+      - objectName: KEYCLOAK-ADMIN-PASSWORD
+        objectType: secret
+
+# External Secrets
+externalSecrets:
+  adminSecretName: kv-auragxp-uat-eus-sh
+  dbSecretName: kv-auragxp-uat-eus-sh
+
+# Istio Configuration
+istio:
+  enabled: true
+  gatewayName: watershed-istio-gateway
+  virtualServiceName: keycloak-vs
+  destinationRuleName: keycloak-dr
+
+# Certificate Configuration
+certificate:
+  enabled: true
+  secretName: keycloak-tls
+  dnsNames:
+    - auragxp-uat.auratrace.ai
+  issuerRef:
+    name: letsencrypt-prod
+    kind: ClusterIssuer
+
+# Autoscaling
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 3
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 70
+
+# Pod Anti-Affinity
+podAntiAffinity:
+  enabled: true
+  requiredDuringScheduling: true
+  preferredDuringScheduling: true
+  weight: 50
+
+# Topology Spread Constraints
+topologySpreadConstraints:
+  enabled: true
+  maxSkew: 1
+  topologyKey: kubernetes.io/hostname
+  whenUnsatisfiable: DoNotSchedule
+
+# Service Account
+serviceAccount:
+  name: auragxp-serviceaccount-uat
+  create: false
+  operatorName: keycloak-operator
+
+# RBAC Configuration
+rbac:
+  enabled: true
+  operatorRoleName: keycloak-operator
+  podViewerRoleName: keycloak-pod-viewer
+
+# Service Configuration
+service:
+  name: keycloak-service
+  type: ClusterIP
+  port: 8080
+  targetPort: 8080
+  protocol: TCP
+
+# Network Policy Configuration
+networkPolicy:
+  enabled: true
+  operatorEgressName: keycloak-operator-egress
+  egressName: keycloak-egress
+  
+  # Database Configuration
+  database:
+    namespace: auragxp-db-uat
+    podSelector:
+      cnpg.io/cluster: auragxp-db-uat-cluster
+    port: 5432
+  
+  # DNS Configuration
+  dns:
+    namespace: kube-system
+    podSelector:
+      k8s-app: kube-dns
+    port: 53
+    protocol: UDP
+  
+  # Cluster Ports
+  cluster:
+    ports:
+      - 7800  # JGroups cluster port
+      - 57800 # FD_SOCK2 port
+  
+  # External Access
+  external:
+    allowedCIDRs:
+      - 0.0.0.0/0
+    ports:
+      - 443
+
+# Frontend Configuration
+frontend:
+  host: auragxp-frontend-uat
+  port: 3000
+
+# Backend Configuration
+backend:
+  host: auragxp-backend-uat
+  port: 3901
+
+# Health Probes Configuration
+probes:
+  startup:
+    path: /keycloak/health/started
+    port: 9000
+    scheme: HTTP
+    initialDelaySeconds: 20
+    periodSeconds: 2
+    timeoutSeconds: 3
+    failureThreshold: 150
+  readiness:
+    path: /keycloak/health/ready
+    port: 9000
+    scheme: HTTP
+    initialDelaySeconds: 20
+    periodSeconds: 10
+    timeoutSeconds: 5
+    successThreshold: 1
+    failureThreshold: 3
+  liveness:
+    path: /keycloak/health/live
+    port: 9000
+    scheme: HTTP
+    initialDelaySeconds: 60
+    periodSeconds: 20
+    timeoutSeconds: 5
+    failureThreshold: 3
+
+# Security Context
+securityContext:
+  fsGroup: 1000
+  runAsUser: 1000
+  runAsNonRoot: true
+
+# Termination Grace Period
+terminationGracePeriodSeconds: 60

@@ -1,0 +1,6 @@
+apiVersion: v2
+name: auragxp-backup-restore
+description: CNPG backup scheduling, monthly archiving, and PITR restore for AuraGXP
+type: application
+version: 1.0.0
+appVersion: "1.0"

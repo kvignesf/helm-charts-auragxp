@@ -1,0 +1,76 @@
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Values.networkPolicy.name }}
+  namespace: {{ .Values.namespace | default .Release.Namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      app: {{ .Values.appName }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow traffic from Istio Ingress Gateway
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.istio.ingressNamespace }}
+          podSelector:
+            matchLabels:
+              app: {{ .Values.istio.ingressGatewayLabel }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.service.port }}
+    {{- if .Values.authProxy.enabled }}
+    # Allow traffic from auth-proxy
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: {{ .Values.authProxy.appName }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.service.port }}
+    {{- end }}
+  egress:
+    # Allow DNS
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: {{ .Values.networkPolicy.egress.dnsPort }}
+        - protocol: TCP
+          port: {{ .Values.networkPolicy.egress.dnsPort }}
+    # Allow external HTTPS calls (Key Vault/Azure APIs)
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - protocol: TCP
+          port: 443
+    # Allow Istio Control Plane (XDS) - CRITICAL FOR SIDECAR
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: istio-system
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: aks-istio-system
+      ports:
+        - protocol: TCP
+          port: {{ .Values.networkPolicy.egress.istioControlPlanePort }}
+    # Allow Frontend to talk to Backend
+    - to:
+        - podSelector:
+            matchLabels:
+              app: {{ .Values.backend.appName }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.backend.port }}
+{{- end }}

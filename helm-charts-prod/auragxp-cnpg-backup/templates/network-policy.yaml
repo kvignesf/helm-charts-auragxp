@@ -1,0 +1,228 @@
+{{- if .Values.networkPolicy.enabled }}
+
+# ============================================================
+# Default deny all ingress to Postgres pods
+# ============================================================
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Values.networkPolicy.defaultDenyName }}
+  namespace: {{ include "auragxp-cnpg.namespace" . }}
+spec:
+  podSelector:
+    matchLabels:
+      cnpg.io/cluster: {{ include "auragxp-cnpg.clusterName" . }}
+  policyTypes:
+    - Ingress
+
+---
+
+# ============================================================
+# 🔥 Allow INTERNAL namespace communication (CRITICAL FIX)
+# Needed because replica connects via Service ClusterIP
+# ============================================================
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-cnpg-internal
+  namespace: {{ include "auragxp-cnpg.namespace" . }}
+spec:
+  podSelector:
+    matchLabels:
+      cnpg.io/cluster: {{ include "auragxp-cnpg.clusterName" . }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              cnpg.io/cluster: {{ include "auragxp-cnpg.clusterName" . }}
+      ports:
+        - protocol: TCP
+          port: 5432
+
+---
+
+# ============================================================
+# Allow INTERNAL Egress for replication (CRITICAL FIX)
+# Required because an Egress policy exists, blocking this.
+# ============================================================
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-cnpg-internal-egress
+  namespace: {{ include "auragxp-cnpg.namespace" . }}
+spec:
+  podSelector:
+    matchLabels:
+      cnpg.io/cluster: {{ include "auragxp-cnpg.clusterName" . }}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              cnpg.io/cluster: {{ include "auragxp-cnpg.clusterName" . }}
+      ports:
+        - protocol: TCP
+          port: 5432
+---
+
+# ============================================================
+# Allow Backend → Postgres
+# ============================================================
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-backend-to-postgres
+  namespace: {{ include "auragxp-cnpg.namespace" . }}
+spec:
+  podSelector:
+    matchLabels:
+      cnpg.io/cluster: {{ include "auragxp-cnpg.clusterName" . }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: auragxp-prod
+          podSelector:
+            matchLabels:
+              app: auragxp-backend
+      ports:
+        - protocol: TCP
+          port: 5432
+
+---
+
+# ============================================================
+# Allow Keycloak → Postgres
+# ============================================================
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-keycloak-to-postgres
+  namespace: {{ include "auragxp-cnpg.namespace" . }}
+spec:
+  podSelector:
+    matchLabels:
+      cnpg.io/cluster: {{ include "auragxp-cnpg.clusterName" . }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: auragxp-keycloak
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/instance: auragxp-keycloak
+      ports:
+        - protocol: TCP
+          port: 5432
+
+---
+
+# ============================================================
+# Allow CNPG Operator → Postgres (Port 8000)
+# Required for cluster health checks
+# ============================================================
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-cnpg-operator
+  namespace: {{ include "auragxp-cnpg.namespace" . }}
+spec:
+  podSelector:
+    matchLabels:
+      cnpg.io/cluster: {{ include "auragxp-cnpg.clusterName" . }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: cnpg-system
+      ports:
+        - protocol: TCP
+          port: 8000
+
+---
+
+# ============================================================
+# Allow DNS egress
+# ============================================================
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Values.networkPolicy.dnsName }}
+  namespace: {{ include "auragxp-cnpg.namespace" . }}
+spec:
+  podSelector:
+    matchLabels:
+      cnpg.io/cluster: {{ include "auragxp-cnpg.clusterName" . }}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+
+---
+
+# ============================================================
+# Allow CNPG pods → Kubernetes API
+# ============================================================
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-kube-apiserver
+  namespace: {{ include "auragxp-cnpg.namespace" . }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/managed-by: cloudnative-pg
+  policyTypes:
+    - Egress
+  egress:
+    - ports:
+        - protocol: TCP
+          port: 443
+
+
+---
+# ============================================================
+# Allow External LoadBalancer Access (IP Restricted)
+# ============================================================
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-external-lb
+  namespace: {{ include "auragxp-cnpg.namespace" . }}
+spec:
+  podSelector:
+    matchLabels:
+      cnpg.io/cluster: {{ include "auragxp-cnpg.clusterName" . }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        {{- range .Values.services.allowedIPs }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: 5432
+
+{{- end }}

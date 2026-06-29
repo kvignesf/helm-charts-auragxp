@@ -1,0 +1,236 @@
+{{- if .Values.networkPolicy.enabled }}
+
+# ============================================================
+# Default deny all ingress to Postgres pods
+# ============================================================
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Values.networkPolicy.defaultDenyName }}
+  namespace: {{ include "auragxp-cnpg-uat.namespace" . }}
+spec:
+  podSelector:
+    matchLabels:
+      cnpg.io/cluster: {{ include "auragxp-cnpg-uat.clusterName" . }}
+  policyTypes:
+    - Ingress
+
+---
+
+# ============================================================
+# 🔥 Allow INTERNAL namespace communication (CRITICAL FIX)
+# Needed because replica connects via Service ClusterIP
+# ============================================================
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-cnpg-internal
+  namespace: {{ include "auragxp-cnpg-uat.namespace" . }}
+spec:
+  podSelector:
+    matchLabels:
+      cnpg.io/cluster: {{ include "auragxp-cnpg-uat.clusterName" . }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              cnpg.io/cluster: {{ include "auragxp-cnpg-uat.clusterName" . }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.networkPolicy.postgresPort }}
+
+---
+
+# ============================================================
+# Allow INTERNAL Egress for replication (CRITICAL FIX)
+# Required because an Egress policy exists, blocking this.
+# ============================================================
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-cnpg-internal-egress
+  namespace: {{ include "auragxp-cnpg-uat.namespace" . }}
+spec:
+  podSelector:
+    matchLabels:
+      cnpg.io/cluster: {{ include "auragxp-cnpg-uat.clusterName" . }}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              cnpg.io/cluster: {{ include "auragxp-cnpg-uat.clusterName" . }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.networkPolicy.postgresPort }}
+---
+
+# ============================================================
+# Allow Backend → Postgres
+# ============================================================
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-backend-to-postgres
+  namespace: {{ include "auragxp-cnpg-uat.namespace" . }}
+spec:
+  podSelector:
+    matchLabels:
+      cnpg.io/cluster: {{ include "auragxp-cnpg-uat.clusterName" . }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.namespaces.backend }}
+          podSelector:
+            matchLabels:
+              {{- range $key, $value := .Values.networkPolicy.podSelectors.backend }}
+              {{ $key }}: {{ $value | quote }}
+              {{- end }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.networkPolicy.postgresPort }}
+
+---
+
+# ============================================================
+# Allow Keycloak → Postgres
+# ============================================================
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-keycloak-to-postgres
+  namespace: {{ include "auragxp-cnpg-uat.namespace" . }}
+spec:
+  podSelector:
+    matchLabels:
+      cnpg.io/cluster: {{ include "auragxp-cnpg-uat.clusterName" . }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.namespaces.keycloak }}
+          podSelector:
+            matchLabels:
+              {{- range $key, $value := .Values.networkPolicy.podSelectors.keycloak }}
+              {{ $key }}: {{ $value | quote }}
+              {{- end }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.networkPolicy.postgresPort }}
+
+---
+
+# ============================================================
+# Allow CNPG Operator → Postgres (Port 8000)
+# Required for cluster health checks
+# ============================================================
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-cnpg-operator
+  namespace: {{ include "auragxp-cnpg-uat.namespace" . }}
+spec:
+  podSelector:
+    matchLabels:
+      cnpg.io/cluster: {{ include "auragxp-cnpg-uat.clusterName" . }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.namespaces.cnpgOperator }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.networkPolicy.cnpgOperatorPort }}
+
+---
+
+# ============================================================
+# Allow DNS egress
+# ============================================================
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Values.networkPolicy.dnsName }}
+  namespace: {{ include "auragxp-cnpg-uat.namespace" . }}
+spec:
+  podSelector:
+    matchLabels:
+      cnpg.io/cluster: {{ include "auragxp-cnpg-uat.clusterName" . }}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.namespaces.kubeSystem }}
+          podSelector:
+            matchLabels:
+              {{- range $key, $value := .Values.networkPolicy.podSelectors.kubeDNS }}
+              {{ $key }}: {{ $value | quote }}
+              {{- end }}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+
+---
+
+# ============================================================
+# Allow CNPG pods → Kubernetes API
+# ============================================================
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-kube-apiserver
+  namespace: {{ include "auragxp-cnpg-uat.namespace" . }}
+spec:
+  podSelector:
+    matchLabels:
+      cnpg.io/cluster: {{ include "auragxp-cnpg-uat.clusterName" . }}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - protocol: TCP
+          port: 443
+
+---
+# ============================================================
+# Allow External LoadBalancer Access (IP Restricted)
+# ============================================================
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-external-lb
+  namespace: {{ include "auragxp-cnpg-uat.namespace" . }}
+spec:
+  podSelector:
+    matchLabels:
+      cnpg.io/cluster: {{ include "auragxp-cnpg-uat.clusterName" . }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        {{- range .Values.services.allowedIPs }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.networkPolicy.postgresPort }}
+
+{{- end }}

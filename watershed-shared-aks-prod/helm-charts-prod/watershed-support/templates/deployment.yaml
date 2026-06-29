@@ -1,0 +1,201 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Values.appName }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: {{ .Values.appLabel }}
+    {{- include "watershed-support.labels" . | nindent 4 }}
+  {{- with .Values.deploymentAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app: {{ .Values.appLabel }}
+  {{- if .Values.deploymentStrategy }}
+  strategy:
+    type: {{ .Values.deploymentStrategy.type }}
+    {{- if .Values.deploymentStrategy.rollingUpdate }}
+    rollingUpdate:
+      maxSurge: {{ .Values.deploymentStrategy.rollingUpdate.maxSurge }}
+      maxUnavailable: {{ .Values.deploymentStrategy.rollingUpdate.maxUnavailable }}
+    {{- end }}
+  {{- end }}
+  template:
+    metadata:
+      labels:
+        app: {{ .Values.appLabel }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        {{- if .Values.istio.sidecarInjection }}
+        sidecar.istio.io/inject: "true"
+        {{- end }}
+        {{- if .Values.istio.holdApplicationUntilProxyStarts }}
+        proxy.istio.io/config: {{ .Values.istio.proxyConfig | quote }}
+        {{- end }}
+        {{- if .Values.monitoring.prometheus.scrape }}
+        prometheus.io/scrape: "true"
+        prometheus.io/port: {{ tpl .Values.monitoring.prometheus.port . | quote }}
+        prometheus.io/path: {{ .Values.monitoring.prometheus.path | quote }}
+        {{- end }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- if .Values.serviceAccount.create }}
+      serviceAccountName: {{ .Values.serviceAccount.name }}
+      {{- else }}
+      serviceAccountName: {{ .Values.serviceAccount.name | default "default" }}
+      {{- end }}
+
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+
+      {{- if .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- end }}
+
+      {{- if or .Values.affinity.podAntiAffinity.enabled .Values.topologySpreadConstraints.enabled }}
+      affinity:
+        {{- if and .Values.affinity.podAntiAffinity.enabled }}
+        podAntiAffinity:
+          {{- if eq .Values.affinity.podAntiAffinity.preferenceType "requiredDuringSchedulingIgnoredDuringExecution" }}
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchExpressions:
+              - key: app
+                operator: In
+                values:
+                - {{ .Values.appLabel }}
+            topologyKey: {{ .Values.affinity.podAntiAffinity.topologyKey }}
+          {{- else }}
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: {{ .Values.affinity.podAntiAffinity.weight }}
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - {{ .Values.appLabel }}
+              topologyKey: {{ .Values.affinity.podAntiAffinity.topologyKey }}
+          {{- end }}
+        {{- end }}
+        {{- with .Values.affinity }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- end }}
+
+      {{- if .Values.topologySpreadConstraints.enabled }}
+      topologySpreadConstraints:
+      - maxSkew: {{ .Values.topologySpreadConstraints.maxSkew }}
+        topologyKey: {{ .Values.topologySpreadConstraints.topologyKey }}
+        whenUnsatisfiable: {{ .Values.topologySpreadConstraints.whenUnsatisfiable }}
+        labelSelector:
+          matchLabels:
+            app: {{ .Values.appLabel }}
+      {{- end }}
+
+      containers:
+        - name: {{ .Values.appName }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+
+          {{- if .Values.containerSecurityContext }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          {{- end }}
+
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.targetPort }}
+              protocol: TCP
+            - name: metrics
+              containerPort: {{ .Values.service.metricsPort }}
+              protocol: TCP
+
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+
+          {{- if .Values.probes.livenessProbe.enabled }}
+          livenessProbe:
+            {{- if eq .Values.probes.livenessProbe.type "tcpSocket" }}
+            tcpSocket:
+              port: {{ .Values.probes.livenessProbe.port }}
+            {{- else if eq .Values.probes.livenessProbe.type "httpGet" }}
+            httpGet:
+              path: {{ .Values.probes.livenessProbe.path | default "/health" }}
+              port: {{ .Values.probes.livenessProbe.port }}
+            {{- else if eq .Values.probes.livenessProbe.type "exec" }}
+            exec:
+              command: {{ .Values.probes.livenessProbe.command | toYaml | nindent 14 }}
+            {{- end }}
+            initialDelaySeconds: {{ .Values.probes.livenessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.livenessProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.livenessProbe.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.livenessProbe.failureThreshold }}
+          {{- end }}
+
+          {{- if .Values.probes.readinessProbe.enabled }}
+          readinessProbe:
+            {{- if eq .Values.probes.readinessProbe.type "tcpSocket" }}
+            tcpSocket:
+              port: {{ .Values.probes.readinessProbe.port }}
+            {{- else if eq .Values.probes.readinessProbe.type "httpGet" }}
+            httpGet:
+              path: {{ .Values.probes.readinessProbe.path | default "/ready" }}
+              port: {{ .Values.probes.readinessProbe.port }}
+            {{- else if eq .Values.probes.readinessProbe.type "exec" }}
+            exec:
+              command: {{ .Values.probes.readinessProbe.command | toYaml | nindent 14 }}
+            {{- end }}
+            initialDelaySeconds: {{ .Values.probes.readinessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.readinessProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.readinessProbe.timeoutSeconds }}
+            successThreshold: {{ .Values.probes.readinessProbe.successThreshold }}
+            failureThreshold: {{ .Values.probes.readinessProbe.failureThreshold }}
+          {{- end }}
+
+          {{- if .Values.probes.startupProbe.enabled }}
+          startupProbe:
+            {{- if eq .Values.probes.startupProbe.type "tcpSocket" }}
+            tcpSocket:
+              port: {{ .Values.probes.startupProbe.port }}
+            {{- else if eq .Values.probes.startupProbe.type "httpGet" }}
+            httpGet:
+              path: {{ .Values.probes.startupProbe.path | default "/startup" }}
+              port: {{ .Values.probes.startupProbe.port }}
+            {{- else if eq .Values.probes.startupProbe.type "exec" }}
+            exec:
+              command: {{ .Values.probes.startupProbe.command | toYaml | nindent 14 }}
+            {{- end }}
+            initialDelaySeconds: {{ .Values.probes.startupProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.startupProbe.periodSeconds }}
+            failureThreshold: {{ .Values.probes.startupProbe.failureThreshold }}
+          {{- end }}
+
+          env:
+            {{- toYaml .Values.env | nindent 12 }}
+            {{- if .Values.extraEnv }}
+            {{- toYaml .Values.extraEnv | nindent 12 }}
+            {{- end }}
+
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}

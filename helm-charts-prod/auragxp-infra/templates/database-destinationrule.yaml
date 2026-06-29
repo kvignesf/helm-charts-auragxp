@@ -1,0 +1,28 @@
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: auragxp-db-cluster
+  namespace: {{ .Release.Namespace }}
+spec:
+  host: auragxp-db-cluster-rw.auragxp-db.svc.cluster.local
+  trafficPolicy:
+    tls:
+      mode: DISABLE
+    connectionPool:
+      tcp:
+        maxConnections: 100
+      http:
+        http1MaxPendingRequests: 10
+        maxRequestsPerConnection: 10
+---
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: auragxp-db-cluster-ro
+  namespace: {{ .Release.Namespace }}
+spec:
+  host: auragxp-db-cluster-ro.auragxp-db.svc.cluster.local
+  trafficPolicy:
+    tls:
+      mode: DISABLE
+

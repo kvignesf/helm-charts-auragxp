@@ -1,0 +1,7 @@
+apiVersion: v2
+name: auragxp-support-uat
+description: Helm chart for AuraGXP Support (VitePress static site)
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
+
