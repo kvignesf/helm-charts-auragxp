@@ -1,0 +1,404 @@
+trigger: none
+
+parameters:
+  - name: targetEnvironment
+    displayName: 'Target Deployment Environment'
+    type: string
+    default: 'dev'
+    values:
+      - dev
+      - uat
+      - prod
+  - name: action
+    displayName: 'Helm Action'
+    type: string
+    default: 'install'
+    values:
+      - install
+      - upgrade
+  - name: passVulnerabilities
+    displayName: 'Pass vulnerabilities (bypass threshold check)'
+    type: boolean
+    default: false
+
+resources:
+  repositories:
+    - repository: qmslms_phase1_dev
+      type: git
+      name: auragxp-platform/support
+      ref: main
+      endpoint: auragxp-platform-sc
+    - repository: templates_dev
+      type: git
+      name: auragxp-devops/DevOps-Templates
+      ref: stage-templates
+      endpoint: auragxp-platform-sc
+    - repository: auragxp_devops_dev
+      type: git
+      name: auragxp-devops/auragxp-devops
+      ref: author/reshma
+      endpoint: auragxp-platform-sc
+    - repository: qmslms_phase1_uat
+      type: git
+      name: auragxp-platform/support
+      ref: main
+      endpoint: auragxp-platform-sc
+    - repository: templates_uat
+      type: git
+      name: auragxp-devops/DevOps-Templates
+      ref: stage-templates
+      endpoint: auragxp-platform-sc
+    - repository: auragxp_devops_uat
+      type: git
+      name: auragxp-devops/auragxp-devops
+      ref: uat
+      endpoint: auragxp-platform-sc
+    - repository: qmslms_phase1_prod
+      type: git
+      name: auragxp-platform/support
+      ref: main
+      endpoint: auragxp-platform-sc
+    - repository: templates_prod
+      type: git
+      name: auragxp-devops/DevOps-Templates
+      ref: stage-templates
+      endpoint: auragxp-platform-sc
+    - repository: auragxp_devops_prod
+      type: git
+      name: auragxp-devops/auragxp-devops
+      ref: main
+      endpoint: auragxp-platform-sc
+
+pool:
+  name: Azure-Self-Hosted2
+
+variables:
+  - name: COMMIT_ID
+    value: $[substring(variables['Build.SourceVersion'], 0, 8)]
+  - name: PASS_VULNERABILITIES
+    value: ${{ parameters.passVulnerabilities }}
+  - ${{ if eq(parameters.targetEnvironment, 'dev') }}:
+    - group: infra-vars-dev
+    - group: Security-Thresholds
+  - ${{ if eq(parameters.targetEnvironment, 'uat') }}:
+    - group: infra-vars-uat
+    - group: Security-Thresholds
+  - ${{ if eq(parameters.targetEnvironment, 'prod') }}:
+    - group: aks-credentials-prod
+
+stages:
+  - stage: BuildAndPush
+    displayName: 'Build and Push Images'
+    jobs:
+      - ${{ if eq(parameters.targetEnvironment, 'dev') }}:
+        - template: Docker/support-build-template.yml@templates_dev
+          parameters:
+            poolName: 'Azure-Self-hosted'
+            dockerfile: 'Dockerfile-support'
+            repoName: $(REPO_SUPPORT)
+      - ${{ if eq(parameters.targetEnvironment, 'uat') }}:
+        - template: Docker/support-build-template.yml@templates_uat
+          parameters:
+            poolName: 'Azure-Self-hosted'
+            dockerfile: 'Dockerfile-support'
+            repoName: $(REPO_SUPPORT)
+      - ${{ if eq(parameters.targetEnvironment, 'prod') }}:
+        - template: Docker/support-build-template.yml@templates_prod
+          parameters:
+            poolName: 'Azure-Self-hosted'
+            dockerfile: 'Dockerfile-support'
+            repoName: $(REPO_SUPPORT)
+
+  - stage: EvaluateVulnerabilities
+    displayName: 'Evaluate Vulnerability Thresholds'
+    dependsOn: BuildAndPush
+    variables:
+      SUPPORT_HIGH: $[stageDependencies.BuildAndPush.DockerBuild_support.outputs['TrivyScan.SUPPORT_HIGH']]
+      SUPPORT_CRITICAL: $[stageDependencies.BuildAndPush.DockerBuild_support.outputs['TrivyScan.SUPPORT_CRITICAL']]
+      BUILD_COMMIT_ID: $[stageDependencies.BuildAndPush.DockerBuild_support.outputs['GetCommitId.COMMIT_ID']]
+    jobs:
+      - job: CheckThresholds
+        displayName: 'Check Vulnerability Thresholds'
+        steps:
+          - checkout: none
+          - script: |
+              set -e
+              SUPPORT_HIGH=${SUPPORT_HIGH:-0}
+              SUPPORT_CRITICAL=${SUPPORT_CRITICAL:-0}
+
+              TOTAL_HIGH=$((SUPPORT_HIGH))
+              TOTAL_CRITICAL=$((SUPPORT_CRITICAL))
+              MAX_HIGH=${MAX_HIGH_VULNS:-10}
+              MAX_CRITICAL=${MAX_CRITICAL_VULNS:-5}
+
+              echo "========== VULNERABILITY SUMMARY =========="
+              echo "Support - HIGH: $SUPPORT_HIGH, CRITICAL: $SUPPORT_CRITICAL"
+              echo "Total HIGH: $TOTAL_HIGH, Total CRITICAL: $TOTAL_CRITICAL"
+              echo "Max allowed HIGH: $MAX_HIGH, Max allowed CRITICAL: $MAX_CRITICAL"
+              echo "==========================================="
+              echo "Build Commit ID: $(BUILD_COMMIT_ID)"
+
+              echo "##vso[task.setvariable variable=COMMIT_ID_FROM_BUILD;isOutput=true]$(BUILD_COMMIT_ID)"
+
+              if [ $TOTAL_HIGH -gt $MAX_HIGH ] || [ $TOTAL_CRITICAL -gt $MAX_CRITICAL ]; then
+                echo "##vso[task.logissue type=warning]Vulnerability threshold exceeded! Check reports."
+                if [ "$PASS_VULNERABILITIES" != "true" ]; then
+                  exit 1
+                fi
+              fi
+            displayName: 'Check Thresholds'
+            name: ThresholdCheck
+            env:
+              SUPPORT_HIGH: $(SUPPORT_HIGH)
+              SUPPORT_CRITICAL: $(SUPPORT_CRITICAL)
+              BUILD_COMMIT_ID: $(BUILD_COMMIT_ID)
+              MAX_HIGH_VULNS: $(MAX_HIGH_VULNS)
+              MAX_CRITICAL_VULNS: $(MAX_CRITICAL_VULNS)
+              PASS_VULNERABILITIES: $(PASS_VULNERABILITIES)
+
+  - stage: DeployAppHelm
+    displayName: 'Deploy App Services'
+    dependsOn:
+      - BuildAndPush
+    condition: succeeded()
+    variables:
+      BUILD_COMMIT_ID: $[stageDependencies.BuildAndPush.DockerBuild_support.outputs['GetCommitId.COMMIT_ID']]
+      COMMIT_FROM_EVAL: $[stageDependencies.EvaluateVulnerabilities.CheckThresholds.outputs['ThresholdCheck.COMMIT_ID_FROM_BUILD']]
+    jobs:
+      - job: HelmDeploy
+        displayName: 'Helm Upgrade/Install'
+        steps:
+          - ${{ if eq(parameters.targetEnvironment, 'dev') }}:
+            - checkout: auragxp_devops_dev
+          - ${{ if eq(parameters.targetEnvironment, 'uat') }}:
+            - checkout: auragxp_devops_uat
+          - ${{ if eq(parameters.targetEnvironment, 'prod') }}:
+            - checkout: auragxp_devops_prod
+          
+          - script: |
+              echo "========================================="
+              echo "Environment: $(ENV_NAME)"
+              echo "Namespace: $(NAMESPACE)"
+              echo "Is Prod: $(IS_PROD)"
+              echo "COMMIT_ID from Build: $(BUILD_COMMIT_ID)"
+              echo "COMMIT_ID from Eval: $(COMMIT_FROM_EVAL)"
+              echo "========================================="
+            displayName: 'Display Environment Context'
+          
+          - script: |
+              set -e
+              echo "========================================="
+              echo "UPDATING SUPPORT VALUES.YAML"
+              echo "========================================="
+              
+              COMMIT_ID_TO_USE="$(BUILD_COMMIT_ID)"
+              
+              echo "Step 1: Checking COMMIT_ID value"
+              echo "BUILD_COMMIT_ID = '$COMMIT_ID_TO_USE'"
+              echo "Length = ${#COMMIT_ID_TO_USE}"
+              
+              if [ -z "$COMMIT_ID_TO_USE" ]; then
+                echo "ERROR: BUILD_COMMIT_ID is empty! Cannot proceed with deployment."
+                exit 1
+              fi
+              
+              echo ""
+              echo "Step 2: Finding support chart directory"
+              SUPPORT_CHART_DIR=$(find $(Build.SourcesDirectory) -path "*/helm-charts-$(ENV_NAME)/auragxp-support" -type d 2>/dev/null | head -1)
+              
+              if [ -z "$SUPPORT_CHART_DIR" ]; then 
+                echo "ERROR: Support chart directory not found"
+                exit 1
+              fi
+              echo "Found chart directory: $SUPPORT_CHART_DIR"
+              
+              echo ""
+              echo "Step 3: Original values.yaml content"
+              SUPPORT_VALUES_FILE="$SUPPORT_CHART_DIR/values.yaml"
+              echo "Original image tag:"
+              grep "tag:" "$SUPPORT_VALUES_FILE" || echo "tag field not found"
+              
+              echo ""
+              echo "Step 4: Updating values.yaml with COMMIT_ID = $COMMIT_ID_TO_USE"
+              sed -i "s|tag: \".*\"|tag: \"$COMMIT_ID_TO_USE\"|g" "$SUPPORT_VALUES_FILE"
+              
+              echo ""
+              echo "Step 5: Updated image tag:"
+              grep "tag:" "$SUPPORT_VALUES_FILE"
+              
+              echo ""
+              echo "Step 6: Full values.yaml content:"
+              echo "----------------------------------------"
+              cat "$SUPPORT_VALUES_FILE"
+              echo "----------------------------------------"
+              
+              echo ""
+              echo "Step 7: Extracting image information"
+              IMAGE_REPO=$(grep "repository:" "$SUPPORT_VALUES_FILE" | awk '{print $2}')
+              IMAGE_TAG=$(grep "tag:" "$SUPPORT_VALUES_FILE" | awk '{print $2}' | tr -d '"')
+              
+              echo "Repository: $IMAGE_REPO"
+              echo "Tag: $IMAGE_TAG"
+              
+              FULL_IMAGE="${IMAGE_REPO}:${IMAGE_TAG}"
+              echo "Full image that will be deployed: $FULL_IMAGE"
+              
+              echo ""
+              if [ -z "$IMAGE_TAG" ] || [ "$IMAGE_TAG" == "" ]; then
+                echo "ERROR: Image tag is empty! Deployment will fail."
+                exit 1
+              elif [ "$IMAGE_TAG" == "$COMMIT_ID_TO_USE" ]; then
+                echo "SUCCESS: Image tag matches BUILD_COMMIT_ID=$COMMIT_ID_TO_USE"
+              else
+                echo "WARNING: Image tag ($IMAGE_TAG) does not match BUILD_COMMIT_ID ($COMMIT_ID_TO_USE)"
+              fi
+              
+              echo ""
+              echo "Setting chart directory variable"
+              echo "##vso[task.setvariable variable=SUPPORT_CHART_DIR]$SUPPORT_CHART_DIR"
+            displayName: 'Update and Verify Support values.yaml'
+            env:
+              BUILD_COMMIT_ID: $(BUILD_COMMIT_ID)
+              ENV_NAME: $(ENV_NAME)
+          
+          - task: AzureCLI@2
+            displayName: 'Whitelist Agent IP'
+            inputs:
+              azureSubscription: $(AZURE_SERVICE_CONNECTION)
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                set -e
+                AGENT_IP=$(curl -s https://api.ipify.org)
+                echo "Agent IP: $AGENT_IP"
+                EXISTING_RANGES=$(az aks show -g "$AKS_RG" -n "$AKS_NAME" --query "apiServerAccessProfile.authorizedIpRanges | join(',', @)" -o tsv || echo "")
+                if [[ "$EXISTING_RANGES" != *"$AGENT_IP"* ]]; then
+                  NEW_RANGES="${EXISTING_RANGES:+${EXISTING_RANGES},}${AGENT_IP}"
+                  az aks update -g "$AKS_RG" -n "$AKS_NAME" --api-server-authorized-ip-ranges "$NEW_RANGES"
+                  echo "Waiting 60s for firewall propagation..."
+                  sleep 60
+                else
+                  echo "Agent IP already whitelisted"
+                fi
+          
+          - task: AzureCLI@2
+            displayName: 'Connect & Prepare Namespace'
+            inputs:
+              azureSubscription: $(AZURE_SERVICE_CONNECTION)
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                set -e
+                az aks get-credentials -g "$AKS_RG" -n "$AKS_NAME" --overwrite-existing
+                kubelogin convert-kubeconfig -l azurecli
+                kubectl create namespace $(NAMESPACE) --dry-run=client -o yaml | kubectl apply -f -
+                echo "Connected to AKS cluster and namespace $(NAMESPACE) ready"
+          
+          - task: AzureCLI@2
+            displayName: 'Deploy Support Service'
+            inputs:
+              azureSubscription: $(AZURE_SERVICE_CONNECTION)
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                set -e
+                az aks get-credentials -g "$AKS_RG" -n "$AKS_NAME" --overwrite-existing
+                kubelogin convert-kubeconfig -l azurecli
+
+                echo "Deploying Support Service..."
+                echo "Support Chart Directory: $(SUPPORT_CHART_DIR)"
+                
+                if [ -z "$SUPPORT_CHART_DIR" ] || [ ! -d "$SUPPORT_CHART_DIR" ]; then
+                  echo "ERROR: Support chart directory not valid at $(SUPPORT_CHART_DIR)"
+                  exit 1
+                fi
+
+                echo ""
+                echo "Values file being used for deployment:"
+                cat "$(SUPPORT_CHART_DIR)/values.yaml"
+                echo ""
+                
+                if [ "$IS_PROD" == "true" ]; then
+                  helm upgrade --install auragxp-support "$(SUPPORT_CHART_DIR)" \
+                    --namespace $(NAMESPACE) \
+                    --values "$(SUPPORT_CHART_DIR)/values.yaml" \
+                    --wait --atomic --timeout 10m
+                else
+                  helm upgrade --install auragxp-support "$(SUPPORT_CHART_DIR)" \
+                    --namespace $(NAMESPACE) \
+                    --values "$(SUPPORT_CHART_DIR)/values.yaml" \
+                    --wait --atomic --timeout 10m
+                fi
+                
+                echo "Support service deployment completed successfully"
+          
+          - task: AzureCLI@2
+            displayName: 'Verify Deployments'
+            inputs:
+              azureSubscription: $(AZURE_SERVICE_CONNECTION)
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                set -e
+                az aks get-credentials -g "$AKS_RG" -n "$AKS_NAME" --overwrite-existing
+                kubelogin convert-kubeconfig -l azurecli
+
+                echo "========================================="
+                echo "VERIFYING DEPLOYMENTS IN NAMESPACE: $(NAMESPACE)"
+                echo "========================================="
+                
+                echo ""
+                echo "Checking pod status..."
+                kubectl get pods -n $(NAMESPACE)
+                
+                echo ""
+                echo "Checking deployment status..."
+                kubectl get deployments -n $(NAMESPACE)
+                
+                echo ""
+                echo "Pod images with commit IDs:"
+                kubectl get pods -n $(NAMESPACE) -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.containers[0].image}{"\n"}{end}'
+                
+                echo ""
+                echo "Specific verification for Support pod:"
+                SUPPORT_POD=$(kubectl get pods -n $(NAMESPACE) -l app=auragxp-support -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
+                if [ ! -z "$SUPPORT_POD" ]; then
+                  SUPPORT_IMAGE=$(kubectl get pod $SUPPORT_POD -n $(NAMESPACE) -o jsonpath='{.spec.containers[0].image}')
+                  echo "Support Pod: $SUPPORT_POD"
+                  echo "Support Image: $SUPPORT_IMAGE"
+                  
+                  if [[ "$SUPPORT_IMAGE" == *"$(BUILD_COMMIT_ID)"* ]]; then
+                    echo "Support pod is using correct image with commit: $(BUILD_COMMIT_ID)"
+                  else
+                    echo "Warning: Support pod image may not have the expected commit tag"
+                  fi
+                else
+                  echo "No support pod found yet - may still be starting"
+                fi
+
+  - stage: DASTScan
+    displayName: 'OWASP ZAP DAST Scan'
+    dependsOn: DeployAppHelm
+    condition: and(succeededOrFailed(), ne('${{ parameters.targetEnvironment }}', 'prod'))
+    jobs:
+      - job: ZAPScan
+        displayName: 'Run OWASP ZAP Baseline Scan'
+        steps:
+          - checkout: none
+          - script: |
+              set -e
+              mkdir -p $(Pipeline.Workspace)/zap-output
+              echo "Running ZAP baseline scan against $(ZAP_TARGET_URL)"
+              docker run --rm \
+                -v $(Pipeline.Workspace)/zap-output:/zap/wrk:rw \
+                ghcr.io/zaproxy/zaproxy:stable \
+                zap-baseline.py \
+                -t $(ZAP_TARGET_URL) \
+                -r zap-report.html \
+                -J zap-report.json \
+                || echo "ZAP scan completed with warnings"
+            displayName: 'Execute ZAP Scan'
+            continueOnError: true
+          - publish: $(Pipeline.Workspace)/zap-output
+            artifact: ZAP-Reports
+            condition: always()

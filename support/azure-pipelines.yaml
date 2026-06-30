@@ -1,0 +1,147 @@
+trigger:
+  branches:
+    include:
+      - main
+  paths:
+    include:
+      - '**'
+
+pool:
+  vmImage: 'ubuntu-22.04'
+
+variables:
+  - group: Azure-Credentials
+  - name: COMMIT_ID
+    value: $[substring(variables['Build.SourceVersion'], 0, 8)]
+
+stages:
+  # ----------------------------
+  # Stage 1: Build and Push Support Image
+  # ----------------------------
+  - stage: BuildSupport
+    displayName: "Build and Push Support Image"
+    jobs:
+      - job: BuildSupportImage
+        displayName: "Build & Push Support Image"
+        steps:
+          - checkout: self
+
+          # Login to Azure and ACR
+          - script: |
+              echo "Logging in to Azure..."
+              az login --service-principal \
+                  -u "$CLIENT_ID" \
+                  -p "$CLIENT_SECRET" \
+                  --tenant "$TENANT_ID"
+              az account show
+
+              echo "Logging in to ACR..."
+              az acr login --name auragxpacrdev
+            displayName: 'Login to Azure and ACR'
+            env:
+              CLIENT_ID: $(CLIENT_ID)
+              CLIENT_SECRET: $(CLIENT_SECRET)
+              TENANT_ID: $(TENANT_ID)
+
+          # Build and Push Support Docker Image - Using only COMMIT_ID as tag
+          - script: |
+              echo "Building Support Docker image..."
+              echo "Commit ID: $(COMMIT_ID)"
+              echo "Registry: $(REGISTRY)"
+              echo "Repo: $(REPO_SUPPORT)"
+              
+              docker build \
+                -f Dockerfile-support \
+                -t $(REGISTRY)/$(REPO_SUPPORT):$(COMMIT_ID) \
+                .
+              
+              echo "Pushing Support image..."
+              docker push $(REGISTRY)/$(REPO_SUPPORT):$(COMMIT_ID)
+            displayName: "Build and Push Support Image"
+            env:
+              REGISTRY: $(REGISTRY)
+              REPO_SUPPORT: $(REPO_SUPPORT)
+
+  # ----------------------------
+  # Stage 2: Deploy Support to VM
+  # ----------------------------
+  - stage: DeploySupport
+    displayName: "Deploy Support Image to VM"
+    dependsOn: BuildSupport
+    condition: succeeded()  # Only deploy if build stage succeeds
+    jobs:
+      - job: DeploySupport
+        displayName: "Deploy Support on VM"
+        steps:
+          - checkout: none
+
+          # Download SSH Key (secure file)
+          - task: DownloadSecureFile@1
+            name: sshKey
+            inputs:
+              secureFile: "id_rsa"
+
+          # Add VM to known_hosts
+          - task: Bash@3
+            displayName: "Add VM host key to known_hosts"
+            inputs:
+              targetType: 'inline'
+              script: |
+                set -e
+                mkdir -p ~/.ssh
+                ssh-keyscan -H $(VM_IP) >> ~/.ssh/known_hosts
+                chmod 644 ~/.ssh/known_hosts
+
+          # Deploy Support Container on VM
+          - task: SSH@0
+            displayName: "Deploy Support Container on VM"
+            inputs:
+              sshEndpoint: 'ssh-service-connection-dev'
+              runOptions: 'inline'
+              inline: |
+                set -e
+                echo "Exporting environment variables"
+                export CLIENT_ID="$(CLIENT_ID)"
+                export CLIENT_SECRET="$(CLIENT_SECRET)"
+                export TENANT_ID="$(TENANT_ID)"
+                export REGISTRY="$(REGISTRY)"
+                export REPO_SUPPORT="$(REPO_SUPPORT)"
+                export COMMIT_ID="$(COMMIT_ID)"
+
+                echo "Logging in to ACR using docker..."
+                echo "$CLIENT_SECRET" | docker login "$REGISTRY" \
+                  -u "$CLIENT_ID" \
+                  --password-stdin
+                  
+                az acr login --name auragxpacrdev
+
+                echo "Pulling Support Docker image..."
+                docker pull $REGISTRY/$REPO_SUPPORT:$COMMIT_ID
+
+                # Create Docker network if it doesn't exist
+                docker network inspect auragxp-support >/dev/null 2>&1 || docker network create auragxp-support --driver bridge
+
+                # Remove old support container if it exists
+                echo "Removing old support container if it exists..."
+                docker rm -f auragxp-support || echo "No old support container to remove"
+
+                echo "Running Support container..."
+                docker run -d \
+                  --name auragxp-support \
+                  -p 127.0.0.1:8082:80 \
+                  --restart always \
+                  --network auragxp-support \
+                  $REGISTRY/$REPO_SUPPORT:$COMMIT_ID
+
+                echo "Checking running containers..."
+                docker ps
+                
+                echo "Container logs (last 10 lines):"
+                docker logs --tail 10 auragxp-support
+            env:
+              CLIENT_ID: $(CLIENT_ID)
+              CLIENT_SECRET: $(CLIENT_SECRET)
+              TENANT_ID: $(TENANT_ID)
+              REGISTRY: $(REGISTRY)
+              REPO_SUPPORT: $(REPO_SUPPORT)
+              COMMIT_ID: $(COMMIT_ID)
